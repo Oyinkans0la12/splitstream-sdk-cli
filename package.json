@@ -11,9 +11,9 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build -w @splitstream/sdk && npm run build -w splitstream-cli",
+    "typecheck": "npm run build -w @splitstream/sdk && npm run typecheck -w @splitstream/sdk && npm run typecheck -w splitstream-cli",
+    "test": "npm run test -w @splitstream/sdk && npm run test -w splitstream-cli",
     "clean": "npm run clean --workspaces --if-present"
   },
   "devDependencies": {
