@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Local secrets - never commit these
+.env
+.env.*
+!.env.example
+
+# Generated artefacts
+coverage/
+SPLITSTREAM_REPORT.md
+.manifests/
+
+# Editor / OS
+.DS_Store
+*.log

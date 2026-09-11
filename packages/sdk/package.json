@@ -1,0 +1,31 @@
+{
+  "name": "@splitstream/sdk",
+  "version": "0.1.0",
+  "description": "Thin, typed client for the deployed splitstream-core contract. Browser-safe: no CLI-only dependencies.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "^17.0.1"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "splitstream-cli",
+  "version": "0.1.0",
+  "description": "Terminal cockpit for simulating, checking, and claiming SplitStream payouts.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "splitstream": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@splitstream/sdk": "*",
+    "@stellar/stellar-sdk": "^17.0.1",
+    "chalk": "^6.0.0",
+    "cli-table3": "^0.6.5",
+    "commander": "^15.0.0",
+    "dotenv": "^17.4.2",
+    "inquirer": "^14.2.2"
+  }
+}
