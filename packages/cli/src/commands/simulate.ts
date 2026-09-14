@@ -9,34 +9,40 @@ import type { Command } from 'commander';
 import chalk from 'chalk';
 
 import { loadConfig } from '../config.js';
-import { loadManifest } from '../manifest.js';
-import { heading, label, note, renderTable, warn } from '../output.js';
 import {
-  DEFAULT_POINTS_RULES,
+  countIssuesByContributor,
   estimateAllocations,
   estimatePostCycleRootCost,
-  fetchPullRequests,
+  fetchMergedPullRequests,
   inferRepoSlug,
   parseRepoSlug,
-  summarizeByContributor,
   type CostEstimate,
   type EstimatedAllocation,
-  type PullRequestSummary,
-} from '../points.js';
+  type MergedPullRequest,
+} from '../contributions.js';
+import { loadManifest } from '../manifest.js';
+import { heading, label, note, renderTable, warn } from '../output.js';
 
 /**
  * `splitstream simulate` - a dry run that never touches the chain.
  *
- * It reads pull requests, applies the documented points rules, and estimates
- * the resulting pro-rata payout plus the cost of the eventual
- * `post_cycle_root` call. No RPC endpoint, no contract ids, no signing.
+ * It reads merged pull requests, counts the distinct issues each contributor
+ * closed (the same count-based rule the deployed `splitstream-actions` action
+ * uses), and estimates the resulting pro-rata payout plus the cost of the
+ * eventual `post_cycle_root` call. No RPC endpoint, no contract ids, no signing.
+ *
+ * A qualifying issue is any issue closed via a merged PR containing a
+ * recognized closing keyword (`Closes #N` / `Fixes #N` / `Resolves #N`,
+ * case-insensitive). No label of any kind is read, and every qualifying issue
+ * counts equally.
  */
 
 export interface SimulateFlags {
   cycle?: string;
   manifest?: string;
-  repo?: string;
+  repo?: string | string[];
   ref?: string;
+  since?: string;
   pool?: string;
   decimals?: string;
   map?: string;
@@ -47,44 +53,46 @@ export interface SimulateFlags {
 
 /** The full result of a dry run, independent of any I/O. */
 export interface SimulationResult {
-  readonly repo: string;
+  readonly repos: readonly string[];
   readonly cycleId: number | null;
   readonly poolAmount: bigint;
   readonly tokenDecimals: number;
-  readonly totalPoints: number;
+  readonly totalIssuesClosed: number;
   readonly allocations: readonly EstimatedAllocation[];
-  readonly dust: bigint;
+  readonly dustRemainder: bigint;
   readonly cost: CostEstimate;
   readonly unmappedContributors: readonly string[];
-  readonly openPullRequests: number;
   readonly mergedPullRequests: number;
+  /** Lower bound on `merged_at`, when a window was applied. */
+  readonly since: string | null;
 }
 
 /** Computes everything `simulate` prints. Pure: takes the PRs as input. */
 export function buildSimulation(input: {
-  repo: string;
-  pullRequests: readonly PullRequestSummary[];
+  repos: readonly string[];
+  pullRequests: readonly MergedPullRequest[];
   poolAmount: bigint;
   tokenDecimals: number;
   cycleId: number | null;
+  since?: string;
   addressByHandle?: Readonly<Record<string, string>>;
   recordsPerContributor?: boolean;
 }): SimulationResult {
-  const contributors = summarizeByContributor(input.pullRequests, DEFAULT_POINTS_RULES);
-  const { allocations, dust, totalPoints } = estimateAllocations(
+  const contributors = countIssuesByContributor(input.pullRequests);
+  const { allocations, dustRemainder, totalIssuesClosed } = estimateAllocations(
     contributors,
     input.poolAmount,
     input.addressByHandle ?? {},
   );
 
   return {
-    repo: input.repo,
+    repos: input.repos,
     cycleId: input.cycleId,
     poolAmount: input.poolAmount,
     tokenDecimals: input.tokenDecimals,
-    totalPoints,
+    totalIssuesClosed,
     allocations,
-    dust,
+    dustRemainder,
     cost: estimatePostCycleRootCost(
       contributors.length,
       input.recordsPerContributor === undefined
@@ -92,8 +100,8 @@ export function buildSimulation(input: {
         : { recordsPerContributor: input.recordsPerContributor },
     ),
     unmappedContributors: allocations.filter((entry) => entry.address === null).map((e) => e.github),
-    openPullRequests: input.pullRequests.filter((pr) => pr.state === 'open').length,
-    mergedPullRequests: input.pullRequests.filter((pr) => pr.merged).length,
+    mergedPullRequests: input.pullRequests.length,
+    since: input.since ?? null,
   };
 }
 
@@ -132,22 +140,66 @@ function parseDecimals(value: string | undefined): number | undefined {
   return parsed;
 }
 
-export async function runSimulate(flags: SimulateFlags): Promise<SimulationResult> {
-  const config = loadConfig({ verbose: flags.verbose === true });
+/** Collects repeated `--repo` flags into one list. */
+export function collectRepos(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
 
-  const repoFlag = flags.repo ?? inferRepoSlug();
-  if (!repoFlag) {
+function requestedRepos(flags: SimulateFlags): string[] {
+  const raw = flags.repo === undefined ? [] : Array.isArray(flags.repo) ? flags.repo : [flags.repo];
+  if (raw.length > 0) {
+    return raw.map((entry) => {
+      const slug = parseRepoSlug(entry);
+      if (!slug) throw new Error(`--repo must look like "owner/name", received "${entry}"`);
+      return slug;
+    });
+  }
+  const inferred = inferRepoSlug();
+  if (!inferred) {
     throw new Error(
       'could not determine the repository. Pass --repo owner/name (no network calls are made by simulate).',
     );
   }
-  const repo = parseRepoSlug(repoFlag);
-  if (!repo) {
-    throw new Error(`--repo must look like "owner/name", received "${repoFlag}"`);
+  return [inferred];
+}
+
+/**
+ * The cycle window's lower bound.
+ *
+ * An explicit `--since` wins. Otherwise, for cycle *N* the boundary is the
+ * `generatedAt` of cycle *N-1*'s manifest - the same source of truth
+ * splitstream-actions uses. When that manifest cannot be read, no window is
+ * applied and every merged PR is considered.
+ */
+async function resolveSince(
+  flags: SimulateFlags,
+  cycleId: number | null,
+  repos: readonly string[],
+): Promise<string | undefined> {
+  if (flags.since !== undefined) {
+    if (Number.isNaN(Date.parse(flags.since))) {
+      throw new Error(`--since must be a valid ISO 8601 timestamp, received "${flags.since}"`);
+    }
+    return flags.since;
   }
+  if (cycleId === null || cycleId <= 0) return undefined;
+  try {
+    const previous = await loadManifest({
+      cycleId: cycleId - 1,
+      ...(repos[0] ? { repo: repos[0] } : {}),
+      ...(flags.ref ? { gitRef: flags.ref } : {}),
+    });
+    return previous.manifest.generatedAt === '' ? undefined : previous.manifest.generatedAt;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function runSimulate(flags: SimulateFlags): Promise<SimulationResult> {
+  const config = loadConfig({ verbose: flags.verbose === true });
+  const repos = requestedRepos(flags);
 
   let cycleId: number | null = null;
-  let tokenDecimals = 7;
   let poolAmount: bigint | null = null;
 
   if (flags.cycle !== undefined) {
@@ -158,18 +210,17 @@ export async function runSimulate(flags: SimulateFlags): Promise<SimulationResul
     cycleId = parsed;
   }
 
-  // A manifest supplies the cycle id, decimals and pool, so the simulation
-  // reflects the real cycle when one is available.
+  // A manifest supplies the cycle id and pool. It never supplies token
+  // decimals: those belong to the token contract, which simulate never reads.
   if (flags.manifest || cycleId !== null) {
     try {
       const loaded = await loadManifest({
         cycleId: cycleId ?? 0,
         ...(flags.manifest ? { manifestPath: flags.manifest } : {}),
-        repo,
+        ...(repos[0] ? { repo: repos[0] } : {}),
         ...(flags.ref ? { gitRef: flags.ref } : {}),
       });
       cycleId = loaded.manifest.cycleId;
-      tokenDecimals = loaded.manifest.tokenDecimals;
       poolAmount = loaded.manifest.poolAmount;
       process.stderr.write(
         note(`Using manifest ${loaded.source} (cycle ${loaded.manifest.cycleId}).\n`),
@@ -179,10 +230,7 @@ export async function runSimulate(flags: SimulateFlags): Promise<SimulationResul
     }
   }
 
-  const decimalsOverride = parseDecimals(flags.decimals);
-  if (decimalsOverride !== undefined) {
-    tokenDecimals = decimalsOverride;
-  }
+  const tokenDecimals = parseDecimals(flags.decimals) ?? 7;
 
   if (flags.pool !== undefined) {
     poolAmount = parseTokenAmount(flags.pool, tokenDecimals);
@@ -194,43 +242,47 @@ export async function runSimulate(flags: SimulateFlags): Promise<SimulationResul
     );
   }
 
+  const since = await resolveSince(flags, cycleId, repos);
   const maxPrs = parsePositiveInt(flags.maxPrs, '--max-prs') ?? 300;
-  const maxPages = Math.max(1, Math.ceil(maxPrs / 100));
 
-  const pullRequests = await fetchPullRequests({
-    repo,
+  const pullRequests = await fetchMergedPullRequests({
+    repos,
+    ...(since ? { since } : {}),
     ...(config.githubToken ? { token: config.githubToken } : {}),
-    maxPages,
-    maxDetailRequests: maxPrs,
+    maxPrs,
     onProgress: (message) => process.stderr.write(note(`${message}\n`)),
   });
 
   const addressByHandle = readAddressMap(flags.map);
 
   return buildSimulation({
-    repo,
+    repos,
     pullRequests,
     poolAmount,
     tokenDecimals,
     cycleId,
+    ...(since ? { since } : {}),
     ...(Object.keys(addressByHandle).length > 0 ? { addressByHandle } : {}),
   });
 }
 
 function printSimulation(result: SimulationResult): void {
   const decimals = result.tokenDecimals;
-  process.stdout.write(`\n${heading(`Simulation - ${result.repo}`)}\n`);
+  process.stdout.write(`\n${heading(`Simulation - ${result.repos.join(', ')}`)}\n`);
   process.stdout.write(
     `${label('cycle:')} ${result.cycleId ?? 'unreleased'}   ` +
       `${label('pool:')} ${formatTokenAmountWithSeparators(result.poolAmount, decimals)}\n`,
   );
   process.stdout.write(
-    `${label('pull requests:')} ${result.mergedPullRequests} merged, ${result.openPullRequests} open   ` +
-      `${label('total points:')} ${result.totalPoints}\n\n`,
+    `${label('window since:')} ${result.since ?? 'all merged PRs'}   ` +
+      `${label('merged PRs:')} ${result.mergedPullRequests}\n`,
   );
+  process.stdout.write(`${label('issues closed:')} ${result.totalIssuesClosed}\n\n`);
 
   if (result.allocations.length === 0) {
-    process.stdout.write(warn('no pull requests were scored; nothing to simulate.\n'));
+    process.stdout.write(
+      warn('no merged pull request closed an issue with a closing keyword; nothing to simulate.\n'),
+    );
     return;
   }
 
@@ -238,20 +290,20 @@ function printSimulation(result: SimulationResult): void {
     String(index + 1),
     `@${entry.github}`,
     entry.address ? truncateAddress(entry.address) : chalk.yellow('unmapped'),
-    String(entry.points),
+    String(entry.issuesClosed),
     `${entry.sharePercent}%`,
     formatTokenAmountWithSeparators(entry.amount, decimals),
   ]);
 
   process.stdout.write(
     `${renderTable(
-      ['#', 'contributor', 'stellar address', 'points', 'share', 'est. amount'],
+      ['#', 'contributor', 'stellar address', 'issues closed', 'share', 'est. amount'],
       rows,
     )}\n`,
   );
 
   process.stdout.write(
-    `\n${label('dust estimate:')} ${formatTokenAmountWithSeparators(result.dust, decimals)}\n`,
+    `\n${label('dust remainder:')} ${formatTokenAmountWithSeparators(result.dustRemainder, decimals)}\n`,
   );
 
   if (result.unmappedContributors.length > 0) {
@@ -291,15 +343,21 @@ function printSimulation(result: SimulationResult): void {
 export function registerSimulateCommand(program: Command): void {
   program
     .command('simulate')
-    .description('dry-run payout calculations against the repo open/merged PRs (never touches the chain)')
+    .description('dry-run payout calculations against merged PRs (never touches the chain)')
     .option('--cycle <id>', 'cycle id to simulate')
-    .option('--manifest <path>', 'read cycle id, pool and decimals from a manifest file')
-    .option('--repo <owner/name>', 'repository to read pull requests from (defaults to origin)')
+    .option('--manifest <path>', 'read cycle id and pool from a manifest file')
+    .option(
+      '--repo <owner/name>',
+      'repository to read merged pull requests from (repeatable; defaults to origin)',
+      collectRepos,
+      [],
+    )
     .option('--ref <ref>', 'git ref to read manifests from when --repo is remote', 'main')
+    .option('--since <iso>', 'cycle window lower bound (ISO 8601); defaults to the previous cycle manifest')
     .option('--pool <amount>', 'pool size in whole tokens (overrides the manifest)')
-    .option('--decimals <n>', 'token decimals when no manifest is available', '7')
+    .option('--decimals <n>', 'token decimals for display and --pool parsing', '7')
     .option('--map <path>', 'JSON map of github handle -> Stellar address')
-    .option('--max-prs <n>', 'maximum number of pull requests to score', '300')
+    .option('--max-prs <n>', 'maximum number of merged pull requests to consider', '300')
     .option('--json', 'print the result as JSON instead of a table')
     .action(async (options: SimulateFlags) => {
       const result = await runSimulate(options);
@@ -315,18 +373,18 @@ export function registerSimulateCommand(program: Command): void {
 export function serializeSimulation(result: SimulationResult): string {
   return JSON.stringify(
     {
-      repo: result.repo,
+      repos: result.repos,
       cycleId: result.cycleId,
       poolAmount: result.poolAmount.toString(),
       tokenDecimals: result.tokenDecimals,
-      totalPoints: result.totalPoints,
-      dust: result.dust.toString(),
+      totalIssuesClosed: result.totalIssuesClosed,
+      dustRemainder: result.dustRemainder.toString(),
       mergedPullRequests: result.mergedPullRequests,
-      openPullRequests: result.openPullRequests,
+      since: result.since,
       allocations: result.allocations.map((entry) => ({
         github: entry.github,
         address: entry.address,
-        points: entry.points,
+        issuesClosed: entry.issuesClosed,
         sharePercent: entry.sharePercent,
         amount: entry.amount.toString(),
       })),
