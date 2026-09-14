@@ -1,4 +1,4 @@
-import { StrKey, hash } from '@stellar/stellar-sdk';
+import { StrKey, hash, xdr } from '@stellar/stellar-sdk';
 
 import {
   MERKLE_HASH_BYTES,
@@ -7,7 +7,6 @@ import {
   compareBytes,
   concatBytes,
   hexToBytes,
-  i128ToBytes,
 } from './bytes.js';
 import { SplitStreamError } from './errors.js';
 import { findManifestEntry, type Manifest, type ManifestEntry } from './types.js';
@@ -19,20 +18,36 @@ import { findManifestEntry, type Manifest, type ManifestEntry } from './types.js
  *
  * The vault verifies the proof against a root that `splitstream-actions`
  * computed. If this file hashes even one byte differently - a different leaf
- * prefix, a different amount width, a different odd-node rule - every claim
+ * pre-image, a different leaf order, a different odd-node rule - every claim
  * fails `InvalidProof` even though the manifest is perfectly correct.
  *
- * The scheme implemented here is the one splitstream-actions' `merkle.ts` uses:
+ * The scheme implemented here is the frozen cross-repo contract used by
+ * splitstream-actions' `merkle.ts` and splitstream-core's `merkle.rs`:
  *
- *   leaf(node) = SHA-256( 0x00 || recipient(32 bytes, strkey payload) || amount_i128_be(16 bytes) )
- *   node(a, b) = SHA-256( 0x01 || min(a, b) || max(a, b) )      // sorted pair
+ *   leaf(stellar, amount) =
+ *     SHA-256( ScVal(Address(stellar)).toXDR() || ScVal(i128(amount)).toXDR() )
  *
- * with leaves sorted ascending by hash before the tree is built (canonical
- * ordering, so the root does not depend on manifest row order), and an
- * unpaired node hashed with itself (`node(n, n)`).
+ * where both halves are the full ScVal-form XDR produced by soroban-sdk's
+ * `ToXdr`:
+ *
+ *   Address (44 bytes): u32(SCV_ADDRESS=18) | u32(SC_ADDRESS_TYPE_ACCOUNT=0)
+ *                       | u32(publickey ED25519=0) | ed25519(32)
+ *   i128    (20 bytes): u32(SCV_I128=10) | int64 hi | uint64 lo
+ *
+ * There are no domain-separation prefixes: unlike a generic Merkle library, the
+ * leaf pre-image carries the ScVal union discriminants itself.
+ *
+ * Internal nodes use the sorted-pair convention:
+ *
+ *   node(a, b) = SHA-256( min(a, b) || max(a, b) )   // ascending byte order
+ *
+ * Leaves are ordered by **ascending Stellar public-key bytes** (not by leaf
+ * hash, and not by manifest row order), so the root is reproducible from the
+ * manifest alone. An unpaired node is **promoted unchanged** to the next level
+ * (it is not hashed with itself), which is why a proof may skip a level.
  *
  * `computeManifestRoot` recomputes the root from the manifest's own rows: if it
- * does not equal the `root` field published by actions, the two schemes have
+ * does not equal the `merkleRoot` published by actions, the two schemes have
  * diverged and {@link buildClaimProof} flags it via `rootMatches: false`. The
  * CLI treats that as fatal unless explicitly overridden, because submitting
  * such a proof burns a fee to fail on-chain.
@@ -41,22 +56,17 @@ import { findManifestEntry, type Manifest, type ManifestEntry } from './types.js
  * browser-safe - no `node:crypto` in this package.
  */
 
-/** Domain-separation prefix for leaf hashes. */
-export const LEAF_PREFIX = 0x00;
-/** Domain-separation prefix for internal nodes. */
-export const NODE_PREFIX = 0x01;
-
-/** A contribution that becomes one leaf: an address and its amount. */
+/** A contribution that becomes one leaf: a Stellar account and its amount. */
 export interface MerkleLeafInput {
-  readonly address: string;
+  readonly stellar: string;
   readonly amount: bigint;
 }
 
 /** A fully built Merkle tree. */
 export interface MerkleTree {
-  /** Leaf hashes, sorted ascending (canonical order). */
+  /** Leaf hashes in canonical order (ascending Stellar public-key bytes). */
   readonly leaves: readonly Uint8Array[];
-  /** `layers[0]` is the sorted leaves; each subsequent layer is half the size. */
+  /** `layers[0]` is the canonical leaves; each subsequent layer is half the size. */
   readonly layers: readonly (readonly Uint8Array[])[];
   readonly root: Uint8Array;
 }
@@ -67,10 +77,11 @@ export interface ClaimProof {
   /** Address whose leaf this proof is for. */
   readonly contributor: string;
   readonly github: string;
-  readonly points: number;
+  /** Distinct issues closed this cycle, as recorded in the manifest. */
+  readonly issuesClosed: number;
   /** Amount committed to in the leaf, in base units. */
   readonly amount: bigint;
-  /** Position of the leaf in the sorted leaf set. */
+  /** Position of the leaf in the canonical (pubkey-ordered) leaf set. */
   readonly leafIndex: number;
   /** Leaf hash, lowercase hex. */
   readonly leaf: string;
@@ -78,34 +89,62 @@ export interface ClaimProof {
   readonly proof: readonly string[];
   /** Root recomputed from this manifest's rows. */
   readonly computedRoot: string;
-  /** Root published in the manifest. */
+  /** Root published in the manifest (`merkleRoot`). */
   readonly manifestRoot: string;
   /** Whether the recomputed root matches the manifest's published root. */
   readonly rootMatches: boolean;
 }
 
+const I128_MIN = -(1n << 127n);
+const I128_MAX = (1n << 127n) - 1n;
+
 function sha256(bytes: Uint8Array): Uint8Array {
   return hash(bytes);
 }
 
-/** Hashes one `(address, amount)` pair into a Merkle leaf. */
-export function merkleLeaf(address: string, amount: bigint): Uint8Array {
-  if (!StrKey.isValidEd25519PublicKey(address)) {
-    throw new SplitStreamError(`cannot build a Merkle leaf for an invalid Stellar address: ${address}`);
+/** The 44-byte ScVal XDR encoding of a Stellar account address. */
+function addressScValBytes(stellar: string): Uint8Array {
+  if (!StrKey.isValidEd25519PublicKey(stellar)) {
+    throw new SplitStreamError(`cannot build a Merkle leaf for an invalid Stellar address: ${stellar}`);
   }
-  const recipient = StrKey.decodeEd25519PublicKey(address);
-  if (recipient.length !== 32) {
+  const payload = StrKey.decodeEd25519PublicKey(stellar);
+  if (payload.length !== 32) {
     throw new SplitStreamError(
-      `expected a 32-byte Ed25519 public key payload, received ${recipient.length} bytes`,
+      `expected a 32-byte Ed25519 public key payload, received ${payload.length} bytes`,
     );
   }
-  return sha256(concatBytes(new Uint8Array([LEAF_PREFIX]), recipient, i128ToBytes(amount)));
+  return xdr.ScVal.scvAddress(
+    xdr.ScAddress.scAddressTypeAccount(xdr.PublicKey.publicKeyTypeEd25519(payload)),
+  ).toXDR();
+}
+
+/** The 20-byte ScVal XDR encoding of a signed 128-bit amount. */
+function amountScValBytes(amount: bigint): Uint8Array {
+  if (amount < I128_MIN || amount > I128_MAX) {
+    throw new SplitStreamError(`amount ${amount.toString()} does not fit in an i128`);
+  }
+  const hi = BigInt.asIntN(64, amount >> 64n);
+  const lo = amount & 0xffffffffffffffffn;
+  return xdr.ScVal.scvI128(new xdr.Int128Parts({ hi: xdr.Int64(hi), lo: xdr.Uint64(lo) })).toXDR();
+}
+
+/** The 32-byte Stellar public-key payload, used to order leaves. */
+function stellarKeyBytes(stellar: string): Uint8Array {
+  if (!StrKey.isValidEd25519PublicKey(stellar)) {
+    throw new SplitStreamError(`cannot order leaves by an invalid Stellar address: ${stellar}`);
+  }
+  return StrKey.decodeEd25519PublicKey(stellar);
+}
+
+/** Hashes one `(stellar, amount)` pair into a Merkle leaf. */
+export function merkleLeaf(stellar: string, amount: bigint): Uint8Array {
+  return sha256(concatBytes(addressScValBytes(stellar), amountScValBytes(amount)));
 }
 
 /** Hashes two child nodes, sorting the pair so the tree is order-independent. */
 export function hashPair(a: Uint8Array, b: Uint8Array): Uint8Array {
   const [left, right] = compareBytes(a, b) <= 0 ? [a, b] : [b, a];
-  return sha256(concatBytes(new Uint8Array([NODE_PREFIX]), left, right));
+  return sha256(concatBytes(left, right));
 }
 
 function assertHashSize(value: Uint8Array, what: string): void {
@@ -114,50 +153,51 @@ function assertHashSize(value: Uint8Array, what: string): void {
   }
 }
 
-/** Builds a tree from already-hashed leaves. */
-export function buildMerkleTreeFromLeaves(leaves: readonly Uint8Array[]): MerkleTree {
-  if (leaves.length === 0) {
+/**
+ * Builds the sorted-pair tree from `(stellar, amount)` pairs.
+ *
+ * Leaves are ordered by ascending Stellar public-key bytes; an unpaired node is
+ * promoted unchanged (matching splitstream-core's verifier).
+ */
+export function buildMerkleTree(inputs: readonly MerkleLeafInput[]): MerkleTree {
+  if (inputs.length === 0) {
     throw new SplitStreamError('cannot build a Merkle tree with no leaves');
   }
-  for (const [index, leaf] of leaves.entries()) {
+
+  const sorted = [...inputs].sort((a, b) =>
+    compareBytes(stellarKeyBytes(a.stellar), stellarKeyBytes(b.stellar)),
+  );
+
+  let level = sorted.map((input) => merkleLeaf(input.stellar, input.amount));
+  for (const [index, leaf] of level.entries()) {
     assertHashSize(leaf, `leaf[${index}]`);
   }
+  const layers: Uint8Array[][] = [level];
 
-  const sorted = [...leaves].sort(compareBytes);
-  const layers: Uint8Array[][] = [sorted];
-
-  while ((layers[layers.length - 1]?.length ?? 0) > 1) {
-    const previous = layers[layers.length - 1] as Uint8Array[];
+  while (level.length > 1) {
     const next: Uint8Array[] = [];
-    for (let index = 0; index < previous.length; index += 2) {
-      const left = previous[index] as Uint8Array;
-      const right = index + 1 < previous.length ? (previous[index + 1] as Uint8Array) : left;
-      next.push(hashPair(left, right));
+    for (let index = 0; index < level.length; index += 2) {
+      const left = level[index] as Uint8Array;
+      const right = index + 1 < level.length ? (level[index + 1] as Uint8Array) : undefined;
+      // An unpaired node is promoted unchanged, never hashed with itself.
+      next.push(right === undefined ? left : hashPair(left, right));
     }
-    layers.push(next);
+    level = next;
+    layers.push(level);
   }
 
-  const root = layers[layers.length - 1]?.[0];
-  if (!root) {
-    throw new SplitStreamError('Merkle tree construction produced no root');
-  }
-  return { leaves: sorted, layers, root };
-}
-
-/** Builds a tree from `(address, amount)` pairs. */
-export function buildMerkleTree(inputs: readonly MerkleLeafInput[]): MerkleTree {
-  return buildMerkleTreeFromLeaves(inputs.map((input) => merkleLeaf(input.address, input.amount)));
+  return { leaves: layers[0] as Uint8Array[], layers, root: level[0] as Uint8Array };
 }
 
 /** Converts a parsed manifest's rows into leaf inputs. */
 export function manifestToLeafInputs(manifest: Manifest): MerkleLeafInput[] {
-  return manifest.contributors.map((entry: ManifestEntry) => ({
-    address: entry.address,
+  return manifest.entries.map((entry: ManifestEntry) => ({
+    stellar: entry.stellar,
     amount: entry.amount,
   }));
 }
 
-/** Recomputes the manifest's Merkle root. Returns the raw 32-byte root. */
+/** Recomputes a Merkle root over `(stellar, amount)` pairs. Returns raw bytes. */
 export function computeMerkleRoot(inputs: readonly MerkleLeafInput[]): Uint8Array {
   return buildMerkleTree(inputs).root;
 }
@@ -167,7 +207,12 @@ export function computeManifestRoot(manifest: Manifest): string {
   return bytesToHex(computeMerkleRoot(manifestToLeafInputs(manifest)));
 }
 
-/** Returns the sibling hashes proving `leaf` belongs to `tree`. */
+/**
+ * Returns the sibling hashes proving `leaf` belongs to `tree`.
+ *
+ * A level where the node was promoted (no sibling) contributes no element, so
+ * the proof may be shorter than the tree's height.
+ */
 export function merkleProofForLeaf(tree: MerkleTree, leaf: Uint8Array): Uint8Array[] {
   const index = tree.leaves.findIndex((candidate) => bytesEqual(candidate, leaf));
   if (index < 0) {
@@ -178,9 +223,12 @@ export function merkleProofForLeaf(tree: MerkleTree, leaf: Uint8Array): Uint8Arr
   let cursor = index;
   for (let level = 0; level < tree.layers.length - 1; level += 1) {
     const row = tree.layers[level] as readonly Uint8Array[];
-    const siblingIndex = cursor % 2 === 0 ? cursor + 1 : cursor - 1;
-    const sibling = siblingIndex < row.length ? (row[siblingIndex] as Uint8Array) : (row[cursor] as Uint8Array);
-    proof.push(sibling);
+    if (cursor % 2 === 0) {
+      const sibling = row[cursor + 1];
+      if (sibling !== undefined) proof.push(sibling);
+    } else {
+      proof.push(row[cursor - 1] as Uint8Array);
+    }
     cursor = Math.floor(cursor / 2);
   }
   return proof;
@@ -188,6 +236,8 @@ export function merkleProofForLeaf(tree: MerkleTree, leaf: Uint8Array): Uint8Arr
 
 /**
  * Verifies a proof locally before it is submitted.
+ *
+ * Uses the same sorted-pair fold as the contract's `verify_proof`.
  *
  * @param proof - sibling hashes, lowercase hex
  * @param leaf - leaf hash, lowercase hex
@@ -212,26 +262,26 @@ export function buildClaimProof(manifest: Manifest, identifier: string): ClaimPr
   const entry = findManifestEntry(manifest, identifier);
   if (!entry) {
     throw new SplitStreamError(
-      `${identifier} is not present in the cycle ${manifest.cycleId} manifest (${manifest.contributors.length} contributors)`,
+      `${identifier} is not present in the cycle ${manifest.cycleId} manifest (${manifest.entries.length} entries)`,
     );
   }
 
-  const leaf = merkleLeaf(entry.address, entry.amount);
+  const leaf = merkleLeaf(entry.stellar, entry.amount);
   const tree = buildMerkleTree(manifestToLeafInputs(manifest));
   const proof = merkleProofForLeaf(tree, leaf);
   const computedRoot = bytesToHex(tree.root);
 
   return {
     cycleId: manifest.cycleId,
-    contributor: entry.address,
+    contributor: entry.stellar,
     github: entry.github,
-    points: entry.points,
+    issuesClosed: entry.issuesClosed,
     amount: entry.amount,
     leafIndex: tree.leaves.findIndex((candidate) => bytesEqual(candidate, leaf)),
     leaf: bytesToHex(leaf),
     proof: proof.map(bytesToHex),
     computedRoot,
-    manifestRoot: manifest.root,
-    rootMatches: computedRoot === manifest.root,
+    manifestRoot: manifest.merkleRoot,
+    rootMatches: computedRoot === manifest.merkleRoot,
   };
 }
