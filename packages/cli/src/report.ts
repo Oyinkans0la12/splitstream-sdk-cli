@@ -15,7 +15,8 @@ export const DEFAULT_REPORT_PATH = 'SPLITSTREAM_REPORT.md';
 export interface ReportEntry {
   readonly github: string;
   readonly address: string;
-  readonly points: number;
+  /** Distinct issues closed by this contributor's merged PRs this cycle. */
+  readonly issuesClosed: number;
   /** Amount in base units. */
   readonly amount: bigint;
   readonly claimed: boolean;
@@ -25,6 +26,11 @@ export interface ReportEntry {
 export interface ReportInput {
   readonly manifest: Manifest;
   readonly entries: readonly ReportEntry[];
+  /**
+   * Token decimals, read from the token contract at runtime - the manifest
+   * does not carry them.
+   */
+  readonly tokenDecimals: number;
   /** Address the payouts come from, for verification. */
   readonly vaultContractId: string;
   /** Human-readable network name, e.g. `testnet`. */
@@ -48,12 +54,12 @@ function cell(value: string): string {
 /** Renders the report as a markdown string. */
 export function generateReport(input: ReportInput): string {
   const { manifest } = input;
-  const decimals = manifest.tokenDecimals;
+  const decimals = input.tokenDecimals;
   const unit = input.tokenSymbol ?? 'tokens';
   const generatedAt = (input.generatedAt ?? new Date()).toISOString();
 
   const sorted = [...input.entries].sort(
-    (a, b) => b.points - a.points || a.github.localeCompare(b.github),
+    (a, b) => b.issuesClosed - a.issuesClosed || a.github.localeCompare(b.github),
   );
 
   const totalPaid = sorted.filter((entry) => entry.claimed).reduce((sum, entry) => sum + entry.amount, 0n);
@@ -64,9 +70,7 @@ export function generateReport(input: ReportInput): string {
 
   lines.push(`# SplitStream payout report - cycle ${manifest.cycleId}`);
   lines.push('');
-  lines.push(
-    `Generated ${generatedAt} from manifest root \`${manifest.root}\`.`,
-  );
+  lines.push(`Generated ${generatedAt} from manifest root \`${manifest.merkleRoot}\`.`);
   lines.push('');
   lines.push('## Cycle summary');
   lines.push('');
@@ -74,28 +78,32 @@ export function generateReport(input: ReportInput): string {
   lines.push(`- **Vault contract:** \`${input.vaultContractId}\``);
   lines.push(`- **Pool funded:** ${formatTokenAmount(manifest.poolAmount, decimals)} ${unit}`);
   lines.push(`- **Contributors:** ${sorted.length}`);
-  lines.push(`- **Total points:** ${manifest.totalPoints}`);
+  lines.push(`- **Issues closed:** ${manifest.totalIssuesClosed}`);
   lines.push(`- **Allocated:** ${formatTokenAmount(totalAllocated, decimals)} ${unit}`);
-  lines.push(`- **Claimed so far:** ${formatTokenAmount(totalPaid, decimals)} ${unit} (${claimedCount}/${sorted.length} contributors)`);
-  lines.push(`- **Dust remainder:** ${formatTokenAmount(manifest.dust, decimals)} ${unit}`);
+  lines.push(
+    `- **Claimed so far:** ${formatTokenAmount(totalPaid, decimals)} ${unit} (${claimedCount}/${sorted.length} contributors)`,
+  );
+  lines.push(
+    `- **Dust remainder:** ${formatTokenAmount(manifest.dustRemainder, decimals)} ${unit}`,
+  );
   lines.push('');
 
   lines.push('## Allocations');
   lines.push('');
-  lines.push('| GitHub | Stellar address | Points | Amount | Claimed |');
+  lines.push('| GitHub | Stellar address | Issues closed | Amount | Claimed |');
   lines.push('| --- | --- | ---: | ---: | :---: |');
   for (const entry of sorted) {
     lines.push(
       `| @${cell(entry.github)} | \`${truncateAddress(entry.address, TRUNCATION_LEADING, TRUNCATION_TRAILING)}\` | ` +
-        `${entry.points} | ${formatTokenAmount(entry.amount, decimals)} | ${entry.claimed ? 'yes' : 'no'} |`,
+        `${entry.issuesClosed} | ${formatTokenAmount(entry.amount, decimals)} | ${entry.claimed ? 'yes' : 'no'} |`,
     );
   }
   lines.push('');
 
-  if (manifest.dust > 0n) {
+  if (manifest.dustRemainder > 0n) {
     lines.push(
-      `> ${formatTokenAmount(manifest.dust, decimals)} ${unit} of dust remains in the vault because the pool ` +
-        'does not divide evenly across the allocated points. It stays available for the next cycle.',
+      `> ${formatTokenAmount(manifest.dustRemainder, decimals)} ${unit} of dust remains in the vault because the pool ` +
+        'does not divide evenly across the issues closed. It stays available for the next cycle.',
     );
     lines.push('');
   }

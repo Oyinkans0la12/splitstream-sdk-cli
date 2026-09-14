@@ -155,7 +155,7 @@ describe('runClaim', () => {
 
   it('refuses to submit a proof whose recomputed root disagrees with the manifest', async () => {
     vi.stubEnv('SPLITSTREAM_DEV_SECRET_KEY', SECRET_A);
-    const manifest = writeManifestFile({ cycleId: 7, root: 'ff'.repeat(32) });
+    const manifest = writeManifestFile({ cycleId: 7, merkleRoot: 'ff'.repeat(32) });
     const { client, submitted } = fakeClient();
 
     await expect(
@@ -166,7 +166,7 @@ describe('runClaim', () => {
 
   it('submits anyway when --force is passed, but says so', async () => {
     vi.stubEnv('SPLITSTREAM_DEV_SECRET_KEY', SECRET_A);
-    const manifest = writeManifestFile({ cycleId: 7, root: 'ff'.repeat(32) });
+    const manifest = writeManifestFile({ cycleId: 7, merkleRoot: 'ff'.repeat(32) });
     const { client, submitted } = fakeClient();
     const output = captureStdout();
 

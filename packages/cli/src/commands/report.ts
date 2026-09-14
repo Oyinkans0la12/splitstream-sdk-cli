@@ -83,26 +83,30 @@ export async function runReport(flags: ReportFlags): Promise<{ path: string | nu
 
   process.stdout.write(
     note(
-      `Reading claim status for ${loaded.manifest.contributors.length} contributors ` +
+      `Reading claim status for ${loaded.manifest.entries.length} contributors ` +
         `(${concurrency} at a time)...\n`,
     ),
   );
 
+  // Token decimals are a property of the token contract, never the manifest.
+  const tokenDecimals = await client.getTokenDecimals();
+
   const entries: ReportEntry[] = await mapWithConcurrency(
-    loaded.manifest.contributors,
+    loaded.manifest.entries,
     concurrency,
-    async (contributor) => ({
-      github: contributor.github,
-      address: contributor.address,
-      points: contributor.points,
-      amount: contributor.amount,
-      claimed: await client.hasClaimed(loaded.manifest.cycleId, contributor.address),
+    async (entry) => ({
+      github: entry.github,
+      address: entry.stellar,
+      issuesClosed: entry.issuesClosed,
+      amount: entry.amount,
+      claimed: await client.hasClaimed(loaded.manifest.cycleId, entry.stellar),
     }),
   );
 
   const content = generateReport({
     manifest: loaded.manifest,
     entries,
+    tokenDecimals,
     vaultContractId: chain.vaultContractId,
     network: networkLabel(chain.networkPassphrase),
     generatedAt: new Date(),

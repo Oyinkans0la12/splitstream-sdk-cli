@@ -17,9 +17,9 @@ import {
 
 function entries(): ReportEntry[] {
   return [
-    { github: 'ada', address: ADDRESS_A, points: 50, amount: 50_000_000n, claimed: true },
-    { github: 'grace', address: ADDRESS_B, points: 30, amount: 30_000_000n, claimed: false },
-    { github: 'linus', address: ADDRESS_C, points: 20, amount: 20_000_000n, claimed: false },
+    { github: 'ada', address: ADDRESS_A, issuesClosed: 50, amount: 50_000_000n, claimed: true },
+    { github: 'grace', address: ADDRESS_B, issuesClosed: 30, amount: 30_000_000n, claimed: false },
+    { github: 'linus', address: ADDRESS_C, issuesClosed: 20, amount: 20_000_000n, claimed: false },
   ];
 }
 
@@ -27,6 +27,7 @@ function report(overrides: Partial<Parameters<typeof generateReport>[0]> = {}): 
   return generateReport({
     manifest: buildManifest({ cycleId: 3 }),
     entries: entries(),
+    tokenDecimals: 7,
     vaultContractId: VAULT_ID,
     network: 'testnet',
     tokenSymbol: 'SPLIT',
@@ -41,7 +42,7 @@ describe('generateReport', () => {
     expect(content).toContain('# SplitStream payout report - cycle 3');
     expect(content).toContain('- **Pool funded:** 10 SPLIT');
     expect(content).toContain('- **Contributors:** 3');
-    expect(content).toContain('- **Total points:** 100');
+    expect(content).toContain('- **Issues closed:** 100');
     expect(content).toContain('- **Allocated:** 10 SPLIT');
     expect(content).toContain('- **Claimed so far:** 5 SPLIT (1/3 contributors)');
     expect(content).toContain('- **Vault contract:** `' + VAULT_ID + '`');
@@ -49,7 +50,7 @@ describe('generateReport', () => {
 
   it('emits a plain markdown table with one row per contributor, highest first', () => {
     const lines = report().split('\n');
-    expect(lines).toContain('| GitHub | Stellar address | Points | Amount | Claimed |');
+    expect(lines).toContain('| GitHub | Stellar address | Issues closed | Amount | Claimed |');
     expect(lines).toContain('| --- | --- | ---: | ---: | :---: |');
 
     const rows = lines.filter((line) => line.startsWith('| @'));
@@ -73,21 +74,21 @@ describe('generateReport', () => {
 
   it('reports the dust remainder only when there is dust', () => {
     expect(report()).not.toContain('of dust remains in the vault');
-    expect(report({ manifest: buildManifest({ cycleId: 3, dust: '3' }) })).toContain(
+    expect(report({ manifest: buildManifest({ cycleId: 3, dustRemainder: '3' }) })).toContain(
       '0.0000003 SPLIT of dust remains in the vault',
     );
   });
 
   it('escapes table-breaking characters in a GitHub handle', () => {
     const content = report({
-      entries: [{ github: 'a|b', address: ADDRESS_A, points: 1, amount: 1n, claimed: false }],
+      entries: [{ github: 'a|b', address: ADDRESS_A, issuesClosed: 1, amount: 1n, claimed: false }],
     });
     expect(content).toContain('| @a\\|b |');
   });
 
   it('contains no HTML', () => {
     const content = report({
-      manifest: buildManifest({ cycleId: 3, dust: '1' }),
+      manifest: buildManifest({ cycleId: 3, dustRemainder: '1' }),
       accountExplorerUrl: 'https://stellar.expert/explorer/testnet/contract/' + VAULT_ID,
     });
     // Requires a tag-name boundary (`<div>`, `<br/>`, `</div>`), so the

@@ -35,47 +35,44 @@ export const TOKEN_ID = StrKey.encodeContract(new Uint8Array(32).fill(2));
 
 export const TOKEN_DECIMALS = 7;
 
-/** 100 tokens funded, split 50/30/20 by points. */
+/** 100 tokens funded, split 50/30/20 by issues closed. */
 export const ROWS = [
-  { github: 'ada', address: ADDRESS_A, points: 50, amount: 50_000_000n },
-  { github: 'grace', address: ADDRESS_B, points: 30, amount: 30_000_000n },
-  { github: 'linus', address: ADDRESS_C, points: 20, amount: 20_000_000n },
+  { github: 'ada', stellar: ADDRESS_A, issuesClosed: 50, amount: 50_000_000n },
+  { github: 'grace', stellar: ADDRESS_B, issuesClosed: 30, amount: 30_000_000n },
+  { github: 'linus', stellar: ADDRESS_C, issuesClosed: 20, amount: 20_000_000n },
 ] as const;
 
-export const TOTAL_POINTS = ROWS.reduce((sum, row) => sum + row.points, 0);
+export const TOTAL_ISSUES_CLOSED = ROWS.reduce((sum, row) => sum + row.issuesClosed, 0);
 
 /** Root recomputed from the fixture rows. */
 export function fixtureRoot(rows: typeof ROWS = ROWS): string {
   return bytesToHex(
-    computeMerkleRoot(rows.map((row) => ({ address: row.address, amount: row.amount }))),
+    computeMerkleRoot(rows.map((row) => ({ stellar: row.stellar, amount: row.amount }))),
   );
 }
 
 export interface ManifestOverrides {
   cycleId?: number;
   /** Overrides the published root, which is how "tampered manifest" is set up. */
-  root?: string;
+  merkleRoot?: string;
   poolAmount?: string;
-  tokenDecimals?: number;
-  dust?: string;
+  dustRemainder?: string;
 }
 
 function rawManifest(overrides: ManifestOverrides = {}): Record<string, unknown> {
   return {
-    version: 1,
     cycleId: overrides.cycleId ?? 7,
-    poolAmount: overrides.poolAmount ?? '100000000',
-    totalPoints: TOTAL_POINTS,
-    tokenDecimals: overrides.tokenDecimals ?? TOKEN_DECIMALS,
-    root: overrides.root ?? fixtureRoot(),
     generatedAt: '2026-09-01T00:00:00.000Z',
-    dust: overrides.dust ?? '0',
-    contributors: ROWS.map((row) => ({
+    poolAmount: overrides.poolAmount ?? '100000000',
+    totalIssuesClosed: TOTAL_ISSUES_CLOSED,
+    entries: ROWS.map((row) => ({
       github: row.github,
-      address: row.address,
-      points: row.points,
+      stellar: row.stellar,
+      issuesClosed: row.issuesClosed,
       amount: row.amount.toString(),
     })),
+    dustRemainder: overrides.dustRemainder ?? '0',
+    merkleRoot: overrides.merkleRoot ?? fixtureRoot(),
   };
 }
 

@@ -56,9 +56,9 @@ export interface ManifestSummary {
   readonly source: string;
   readonly cycleId: number;
   readonly poolAmount: bigint;
-  readonly totalPoints: number;
+  readonly totalIssuesClosed: number;
   readonly contributorCount: number;
-  readonly dust: bigint;
+  readonly dustRemainder: bigint;
   readonly manifest: Manifest;
 }
 
@@ -155,9 +155,9 @@ export async function collectStatus(
       source: loaded.source,
       cycleId: loaded.manifest.cycleId,
       poolAmount: loaded.manifest.poolAmount,
-      totalPoints: loaded.manifest.totalPoints,
-      contributorCount: loaded.manifest.contributors.length,
-      dust: loaded.manifest.dust,
+      totalIssuesClosed: loaded.manifest.totalIssuesClosed,
+      contributorCount: loaded.manifest.entries.length,
+      dustRemainder: loaded.manifest.dustRemainder,
       manifest: loaded.manifest,
     };
   } catch {
@@ -256,8 +256,8 @@ export function printStatus(result: StatusResult): void {
           ['manifest', result.manifest.source],
           ['pool funded', formatTokenAmountWithSeparators(result.manifest.poolAmount, decimals)],
           ['contributors', String(result.manifest.contributorCount)],
-          ['total points', String(result.manifest.totalPoints)],
-          ['dust', formatTokenAmountWithSeparators(result.manifest.dust, decimals)],
+          ['issues closed', String(result.manifest.totalIssuesClosed)],
+          ['dust', formatTokenAmountWithSeparators(result.manifest.dustRemainder, decimals)],
         ],
       )}\n`,
     );
@@ -287,9 +287,9 @@ export function serializeStatus(result: StatusResult): string {
             source: result.manifest.source,
             cycleId: result.manifest.cycleId,
             poolAmount: result.manifest.poolAmount.toString(),
-            totalPoints: result.manifest.totalPoints,
+            totalIssuesClosed: result.manifest.totalIssuesClosed,
             contributorCount: result.manifest.contributorCount,
-            dust: result.manifest.dust.toString(),
+            dustRemainder: result.manifest.dustRemainder.toString(),
           }
         : null,
       contributor: result.contributor
