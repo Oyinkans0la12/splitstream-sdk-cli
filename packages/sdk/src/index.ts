@@ -33,7 +33,7 @@ export {
   type Manifest,
   type ManifestEntry,
   type RawManifest,
-  type RawManifestContributor,
+  type RawManifestEntry,
   type VestingInfo,
 } from './types.js';
 
@@ -61,11 +61,8 @@ export {
 
 // --- Merkle proofs ----------------------------------------------------------
 export {
-  LEAF_PREFIX,
-  NODE_PREFIX,
   buildClaimProof,
   buildMerkleTree,
-  buildMerkleTreeFromLeaves,
   computeManifestRoot,
   computeMerkleRoot,
   hashPair,

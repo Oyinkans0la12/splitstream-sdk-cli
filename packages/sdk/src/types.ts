@@ -9,59 +9,68 @@ import { StrKey } from '@stellar/stellar-sdk';
  * JSON numbers are never used for token amounts anywhere in this codebase.
  */
 
-/** One contributor row as written by splitstream-actions. */
-export interface RawManifestContributor {
+/**
+ * One payout row, exactly as `splitstream-actions` writes it.
+ *
+ * The field names mirror the writer verbatim: `stellar` (not `address`) and
+ * `issuesClosed` (not `points`). The payout rule counts distinct issues closed
+ * by a contributor's merged PRs; there are no points.
+ */
+export interface RawManifestEntry {
   github: string;
-  address: string;
-  points: number | string;
+  stellar: string;
+  issuesClosed: number | string;
   amount: string;
 }
 
 /**
- * The on-disk manifest. Aliases are accepted for a couple of fields because
- * the actions repo has emitted both `cycle`/`cycleId` and `root`/`merkleRoot`
- * spellings; see {@link parseManifest}.
+ * The on-disk manifest, as `splitstream-actions` writes it.
+ *
+ * The authoritative field names are `entries`, `totalIssuesClosed`,
+ * `dustRemainder` and `merkleRoot`. There is deliberately no `version` field
+ * and no `tokenDecimals`: token decimals are a property of the SEP-41 token
+ * contract, read at runtime with `SplitStreamClient.getTokenDecimals`, not
+ * something a manifest should invent. `root` is accepted only as a
+ * read-compatibility alias for `merkleRoot`; the canonical field written by
+ * `splitstream-actions` is `merkleRoot`.
  */
 export interface RawManifest {
-  version?: number | string;
-  cycle?: number | string;
   cycleId?: number | string;
-  poolAmount?: string | number;
-  totalPoints?: number | string;
-  tokenDecimals?: number | string;
-  root?: string;
-  merkleRoot?: string;
   generatedAt?: string;
-  dust?: string | number;
-  contributors?: readonly RawManifestContributor[];
+  poolAmount?: string | number;
+  totalIssuesClosed?: number | string;
+  entries?: readonly RawManifestEntry[];
+  dustRemainder?: string | number;
+  merkleRoot?: string;
+  /** Read-compatibility alias for `merkleRoot` only. */
+  root?: string;
 }
 
-/** A single contributor payout entry with amounts already parsed to bigint. */
+/** A single payout entry with amounts already parsed to bigint. */
 export interface ManifestEntry {
   /** GitHub handle, without the leading `@`. */
   readonly github: string;
   /** Contributor's Stellar account (`G...`). */
-  readonly address: string;
-  /** Allocated points for the cycle. Integer, never a token amount. */
-  readonly points: number;
+  readonly stellar: string;
+  /** Distinct issues closed by this contributor's merged PRs this cycle. */
+  readonly issuesClosed: number;
   /** Payout amount in the token's base units. */
   readonly amount: bigint;
 }
 
 /** A parsed, validated cycle manifest. */
 export interface Manifest {
-  readonly version: number;
   readonly cycleId: number;
+  readonly generatedAt: string;
   /** Total amount funded into the cycle pool, in base units. */
   readonly poolAmount: bigint;
-  readonly totalPoints: number;
-  readonly tokenDecimals: number;
-  /** Merkle root as lowercase hex (no `0x`), as published by actions. */
-  readonly root: string;
-  readonly generatedAt: string;
-  readonly contributors: readonly ManifestEntry[];
-  /** Amount that does not divide evenly across points, in base units. */
-  readonly dust: bigint;
+  /** Payout denominator: the sum of `entries[].issuesClosed`. */
+  readonly totalIssuesClosed: number;
+  readonly entries: readonly ManifestEntry[];
+  /** Pool remainder that did not divide evenly; left in the vault. */
+  readonly dustRemainder: bigint;
+  /** Merkle root, lowercase hex (no `0x`), exactly as actions wrote it. */
+  readonly merkleRoot: string;
 }
 
 /** Result of a single contributor's `has_claimed` lookup. */
@@ -170,70 +179,69 @@ function asNonEmptyString(value: unknown, what: string): string {
 export function parseManifest(raw: unknown): Manifest {
   const record = asRecord(raw, 'manifest');
 
-  const versionValue = pick(record, ['version']);
-  const cycleValue = pick(record, ['cycleId', 'cycle', 'id']);
+  const cycleValue = pick(record, ['cycleId', 'cycle']);
   const poolValue = pick(record, ['poolAmount', 'pool_amount', 'pool']);
-  const totalPointsValue = pick(record, ['totalPoints', 'total_points']);
-  const decimalsValue = pick(record, ['tokenDecimals', 'token_decimals', 'decimals']);
-  const rootValue = pick(record, ['root', 'merkleRoot', 'merkle_root']);
-  const contributorsValue = pick(record, ['contributors', 'entries']);
-  const dustValue = pick(record, ['dust', 'remainder']);
+  const totalIssuesValue = pick(record, ['totalIssuesClosed', 'total_issues_closed']);
+  const rootValue = pick(record, ['merkleRoot', 'merkle_root', 'root']);
+  const entriesValue = pick(record, ['entries']);
+  const dustValue = pick(record, ['dustRemainder', 'dust_remainder']);
   const generatedAtValue = pick(record, ['generatedAt', 'generated_at']);
 
-  const contributorsRaw = contributorsValue ?? [];
-  if (!Array.isArray(contributorsRaw)) {
-    throw new ManifestParseError('manifest.contributors must be an array');
+  if (entriesValue === undefined) {
+    throw new ManifestParseError(
+      'manifest.entries is required: splitstream-actions writes the payout rows under "entries"',
+    );
+  }
+  if (!Array.isArray(entriesValue)) {
+    throw new ManifestParseError('manifest.entries must be an array');
   }
 
-  const contributors: ManifestEntry[] = contributorsRaw.map((entry, index) => {
-    const row = asRecord(entry, `manifest.contributors[${index}]`);
-    const github = asNonEmptyString(pick(row, ['github', 'handle']), `contributors[${index}].github`);
-    const address = asNonEmptyString(pick(row, ['address', 'stellarAddress']), `contributors[${index}].address`);
-    if (!isValidStellarAddress(address)) {
+  const entries: ManifestEntry[] = entriesValue.map((entry, index) => {
+    const row = asRecord(entry, `manifest.entries[${index}]`);
+    const github = asNonEmptyString(pick(row, ['github', 'handle']), `entries[${index}].github`);
+    const stellar = asNonEmptyString(pick(row, ['stellar', 'stellarAddress']), `entries[${index}].stellar`);
+    if (!isValidStellarAddress(stellar)) {
       throw new ManifestParseError(
-        `contributors[${index}].address is not a valid Stellar account: ${address}`,
+        `entries[${index}].stellar is not a valid Stellar account: ${stellar}`,
       );
     }
-    const points = asInteger(pick(row, ['points']), `contributors[${index}].points`);
-    if (points < 0) {
-      throw new ManifestParseError(`contributors[${index}].points must not be negative`);
+    const issuesClosed = asInteger(pick(row, ['issuesClosed']), `entries[${index}].issuesClosed`);
+    if (issuesClosed < 0) {
+      throw new ManifestParseError(`entries[${index}].issuesClosed must not be negative`);
     }
-    const amount = asBigIntAmount(pick(row, ['amount', 'claimable']), `contributors[${index}].amount`);
+    const amount = asBigIntAmount(pick(row, ['amount', 'claimable']), `entries[${index}].amount`);
     if (amount < 0n) {
-      throw new ManifestParseError(`contributors[${index}].amount must not be negative`);
+      throw new ManifestParseError(`entries[${index}].amount must not be negative`);
     }
-    return { github, address, points, amount };
+    return { github, stellar, issuesClosed, amount };
   });
 
-  const duplicates = findDuplicateAddresses(contributors);
+  const duplicates = findDuplicateAddresses(entries);
   if (duplicates.length > 0) {
     throw new ManifestParseError(
       `manifest contains duplicate contributor addresses: ${duplicates.join(', ')}`,
     );
   }
 
-  const tokenDecimals = decimalsValue === undefined ? 7 : asInteger(decimalsValue, 'manifest.tokenDecimals');
-  if (tokenDecimals < 0 || tokenDecimals > 38) {
-    throw new ManifestParseError(`manifest.tokenDecimals is out of range: ${tokenDecimals}`);
+  const totalIssuesClosed =
+    totalIssuesValue === undefined
+      ? entries.reduce((sum, entry) => sum + entry.issuesClosed, 0)
+      : asInteger(totalIssuesValue, 'manifest.totalIssuesClosed');
+  if (totalIssuesClosed < 0) {
+    throw new ManifestParseError('manifest.totalIssuesClosed must not be negative');
   }
 
-  const totalPoints =
-    totalPointsValue === undefined
-      ? contributors.reduce((sum, entry) => sum + entry.points, 0)
-      : asInteger(totalPointsValue, 'manifest.totalPoints');
-
-  const dust = dustValue === undefined ? 0n : asBigIntAmount(dustValue, 'manifest.dust');
+  const dustRemainder =
+    dustValue === undefined ? 0n : asBigIntAmount(dustValue, 'manifest.dustRemainder');
 
   return {
-    version: versionValue === undefined ? 1 : asInteger(versionValue, 'manifest.version'),
     cycleId: asInteger(cycleValue, 'manifest.cycleId'),
-    poolAmount: asBigIntAmount(poolValue, 'manifest.poolAmount'),
-    totalPoints,
-    tokenDecimals,
-    root: asNonEmptyString(rootValue, 'manifest.root').toLowerCase().replace(/^0x/, ''),
     generatedAt: generatedAtValue === undefined ? '' : String(generatedAtValue),
-    contributors,
-    dust,
+    poolAmount: asBigIntAmount(poolValue, 'manifest.poolAmount'),
+    totalIssuesClosed,
+    entries,
+    dustRemainder,
+    merkleRoot: asNonEmptyString(rootValue, 'manifest.merkleRoot').toLowerCase().replace(/^0x/, ''),
   };
 }
 
@@ -241,8 +249,8 @@ function findDuplicateAddresses(entries: readonly ManifestEntry[]): string[] {
   const seen = new Set<string>();
   const duplicates = new Set<string>();
   for (const entry of entries) {
-    if (seen.has(entry.address)) duplicates.add(entry.address);
-    seen.add(entry.address);
+    if (seen.has(entry.stellar)) duplicates.add(entry.stellar);
+    seen.add(entry.stellar);
   }
   return [...duplicates];
 }
@@ -301,8 +309,8 @@ export function findManifestEntry(
   manifest: Manifest,
   identifier: string,
 ): ManifestEntry | undefined {
-  const byAddress = manifest.contributors.find((entry) => entry.address === identifier);
+  const byAddress = manifest.entries.find((entry) => entry.stellar === identifier);
   if (byAddress) return byAddress;
   const handle = identifier.replace(/^@/, '').toLowerCase();
-  return manifest.contributors.find((entry) => entry.github.toLowerCase() === handle);
+  return manifest.entries.find((entry) => entry.github.toLowerCase() === handle);
 }
