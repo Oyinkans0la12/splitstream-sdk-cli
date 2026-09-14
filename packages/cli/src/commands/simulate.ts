@@ -40,7 +40,8 @@ import { heading, label, note, renderTable, warn } from '../output.js';
 export interface SimulateFlags {
   cycle?: string;
   manifest?: string;
-  repo?: string | string[];
+  /** Repeatable: `--repo a/b --repo c/d` (or `--repo a/b c/d`). */
+  repo?: string[];
   ref?: string;
   since?: string;
   pool?: string;
@@ -140,13 +141,8 @@ function parseDecimals(value: string | undefined): number | undefined {
   return parsed;
 }
 
-/** Collects repeated `--repo` flags into one list. */
-export function collectRepos(value: string, previous: string[]): string[] {
-  return [...previous, value];
-}
-
 function requestedRepos(flags: SimulateFlags): string[] {
-  const raw = flags.repo === undefined ? [] : Array.isArray(flags.repo) ? flags.repo : [flags.repo];
+  const raw = flags.repo ?? [];
   if (raw.length > 0) {
     return raw.map((entry) => {
       const slug = parseRepoSlug(entry);
@@ -347,10 +343,8 @@ export function registerSimulateCommand(program: Command): void {
     .option('--cycle <id>', 'cycle id to simulate')
     .option('--manifest <path>', 'read cycle id and pool from a manifest file')
     .option(
-      '--repo <owner/name>',
+      '--repo <owner/name...>',
       'repository to read merged pull requests from (repeatable; defaults to origin)',
-      collectRepos,
-      [],
     )
     .option('--ref <ref>', 'git ref to read manifests from when --repo is remote', 'main')
     .option('--since <iso>', 'cycle window lower bound (ISO 8601); defaults to the previous cycle manifest')
