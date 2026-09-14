@@ -1,0 +1,13 @@
+{
+  "cycleId": 3,
+  "generatedAt": "2026-09-10T00:00:00.000Z",
+  "poolAmount": "10000000000",
+  "totalIssuesClosed": 19,
+  "entries": [
+    { "github": "octocat", "stellar": "GC3BLRQMHJGDIBAVHA2WQOY6Q7CBLAZUNZPIR5NYAX6XTQZUSTVRHHPK", "issuesClosed": 1, "amount": "526315789" },
+    { "github": "hubot", "stellar": "GCWSW5ZMOHGEBLUFKL7PZGPZKW3OMMDCAT4OMBFKWHXNIUGWGG43HQ7C", "issuesClosed": 4, "amount": "2105263157" },
+    { "github": "mona", "stellar": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "issuesClosed": 2, "amount": "1052631578" }
+  ],
+  "dustRemainder": "6315789476",
+  "merkleRoot": "42cb7efad0838a517c414ed4fe8fe58560bb0aa976c1fe0102317f890663f94f"
+}

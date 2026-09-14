@@ -1,0 +1,26 @@
+{
+  "$comment": "Cross-language golden fixture for splitstream-actions Merkle generation. Values were derived from the XDR layout pinned in src/merkle.ts (ScVal-form ToXdr, verified against the soroban-sdk Rust source: an Address ScVal is u32(SCV_ADDRESS) + u32(SC_ADDRESS_TYPE_ACCOUNT) + u32(publickey ED25519) + 32 bytes, 44 bytes total). Leaf order for the tree is ascending stellar pubkey bytes. Before trusting this repo's relayed roots, regenerate the leaf/tree values from splitstream-core's Rust test suite (same inputs, via Address::to_xdr + i128::to_xdr) and confirm they match — see CONTRIBUTING.md 'Merkle golden fixture'.",
+  "leaf": {
+    "stellar": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    "amount": "1052631578",
+    "leafPayloadHex": "00000012000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000003ebde21a",
+    "leafHex": "e89c8b63a02273483139b1e3ebeda17e3354993ebf3a8da9400a52d79c33c206"
+  },
+  "tree3": {
+    "leaves": [
+      { "stellar": "GC3BLRQMHJGDIBAVHA2WQOY6Q7CBLAZUNZPIR5NYAX6XTQZUSTVRHHPK", "amount": "526315789" },
+      { "stellar": "GCWSW5ZMOHGEBLUFKL7PZGPZKW3OMMDCAT4OMBFKWHXNIUGWGG43HQ7C", "amount": "2105263157" },
+      { "stellar": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "amount": "1052631578" }
+    ],
+    "rootHex": "42cb7efad0838a517c414ed4fe8fe58560bb0aa976c1fe0102317f890663f94f"
+  },
+  "tree4": {
+    "leaves": [
+      { "stellar": "GC3BLRQMHJGDIBAVHA2WQOY6Q7CBLAZUNZPIR5NYAX6XTQZUSTVRHHPK", "amount": "526315789" },
+      { "stellar": "GCWSW5ZMOHGEBLUFKL7PZGPZKW3OMMDCAT4OMBFKWHXNIUGWGG43HQ7C", "amount": "2105263157" },
+      { "stellar": "GBE4DJISDQVWPGUIKLPLAFIGYVWIBRGYITEWWLL5VIAWY3HCH55H2MLN", "amount": "1315789473" },
+      { "stellar": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "amount": "1052631578" }
+    ],
+    "rootHex": "b9f5a8aefae7496b17f79c1651af0db64b2ed21e1c07d0209d20143d36197b24"
+  }
+}

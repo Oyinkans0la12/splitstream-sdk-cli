@@ -8,21 +8,19 @@ import {
   parseManifest,
   parseVesting,
 } from '../src/index.js';
-import { ADDRESS_A, ADDRESS_B, CONTRIBUTORS, GOLDEN } from './fixtures.js';
+import { ADDRESS_A, ADDRESS_B, ENTRIES, GOLDEN } from './fixtures.js';
 
 const RAW = {
-  version: 1,
   cycleId: 7,
-  poolAmount: '40000000',
-  totalPoints: 40,
-  tokenDecimals: 7,
-  root: GOLDEN.root3,
   generatedAt: '2026-09-01T00:00:00.000Z',
-  dust: '12',
-  contributors: CONTRIBUTORS.map((entry) => ({
+  poolAmount: '40000000',
+  totalIssuesClosed: 40,
+  dustRemainder: '12',
+  merkleRoot: GOLDEN.root3,
+  entries: ENTRIES.map((entry) => ({
     github: entry.github,
-    address: entry.address,
-    points: entry.points,
+    stellar: entry.stellar,
+    issuesClosed: entry.issuesClosed,
     amount: entry.amount.toString(),
   })),
 };
@@ -33,43 +31,53 @@ describe('parseManifest', () => {
     expect(manifest.cycleId).toBe(7);
     expect(typeof manifest.poolAmount).toBe('bigint');
     expect(manifest.poolAmount).toBe(40_000_000n);
-    expect(manifest.dust).toBe(12n);
-    expect(manifest.contributors[0]?.amount).toBe(10_000_000n);
-    expect(manifest.tokenDecimals).toBe(7);
+    expect(manifest.dustRemainder).toBe(12n);
+    expect(manifest.totalIssuesClosed).toBe(40);
+    expect(manifest.entries[0]?.amount).toBe(10_000_000n);
+    expect(manifest.entries[0]?.issuesClosed).toBe(10);
+    expect(manifest.entries[0]?.stellar).toBe(ADDRESS_A);
+    expect(manifest.merkleRoot).toBe(GOLDEN.root3);
   });
 
-  it('accepts the alias spellings splitstream-actions has emitted', () => {
-    const manifest = parseManifest({
-      ...RAW,
-      cycleId: undefined,
-      cycle: 9,
-      root: undefined,
-      merkleRoot: GOLDEN.root3.toUpperCase(),
-      contributors: undefined,
-      entries: RAW.contributors.map((entry) => ({ ...entry, handle: entry.github, github: undefined })),
-    });
-    expect(manifest.cycleId).toBe(9);
+  it('reads merkleRoot as the canonical field and root only as an alias', () => {
+    // If both are present, the field splitstream-actions actually writes wins.
+    const manifest = parseManifest({ ...RAW, merkleRoot: GOLDEN.root3, root: 'ff'.repeat(32) });
+    expect(manifest.merkleRoot).toBe(GOLDEN.root3);
+
+    const aliasOnly = parseManifest({ ...RAW, merkleRoot: undefined, root: GOLDEN.root3.toUpperCase() });
     // Roots are normalized to lowercase so hex comparison is case-insensitive.
-    expect(manifest.root).toBe(GOLDEN.root3);
-    expect(manifest.contributors).toHaveLength(3);
+    expect(aliasOnly.merkleRoot).toBe(GOLDEN.root3);
   });
 
-  it('derives totalPoints when it is absent', () => {
-    const manifest = parseManifest({ ...RAW, totalPoints: undefined });
-    expect(manifest.totalPoints).toBe(40);
+  it('makes merkleRoot required even when the legacy root alias is absent', () => {
+    expect(() => parseManifest({ ...RAW, merkleRoot: undefined })).toThrow(/merkleRoot/);
   });
 
-  it('defaults tokenDecimals and dust when absent', () => {
-    const manifest = parseManifest({ ...RAW, tokenDecimals: undefined, dust: undefined });
-    expect(manifest.tokenDecimals).toBe(7);
-    expect(manifest.dust).toBe(0n);
+  it('derives totalIssuesClosed from the entries when it is absent', () => {
+    const manifest = parseManifest({ ...RAW, totalIssuesClosed: undefined });
+    expect(manifest.totalIssuesClosed).toBe(40);
+  });
+
+  it('defaults dustRemainder to zero when absent', () => {
+    const manifest = parseManifest({ ...RAW, dustRemainder: undefined });
+    expect(manifest.dustRemainder).toBe(0n);
+  });
+
+  it('rejects the invented field names this repo used to read', () => {
+    expect(() => parseManifest({ ...RAW, entries: undefined })).toThrow(/entries/);
+    expect(() =>
+      parseManifest({
+        ...RAW,
+        entries: [{ github: 'ada', address: ADDRESS_A, points: 1, amount: '1' }],
+      }),
+    ).toThrow(/stellar/);
   });
 
   it('rejects a numeric amount outside the safe integer range', () => {
     expect(() =>
       parseManifest({
         ...RAW,
-        contributors: [{ github: 'ada', address: ADDRESS_A, points: 1, amount: 9007199254740993 }],
+        entries: [{ github: 'ada', stellar: ADDRESS_A, issuesClosed: 1, amount: 9007199254740993 }],
       }),
     ).toThrow(ManifestParseError);
   });
@@ -78,7 +86,7 @@ describe('parseManifest', () => {
     expect(() =>
       parseManifest({
         ...RAW,
-        contributors: [{ github: 'ada', address: ADDRESS_A, points: 1, amount: '1.5' }],
+        entries: [{ github: 'ada', stellar: ADDRESS_A, issuesClosed: 1, amount: '1.5' }],
       }),
     ).toThrow(/integer string/);
   });
@@ -87,7 +95,7 @@ describe('parseManifest', () => {
     expect(() =>
       parseManifest({
         ...RAW,
-        contributors: [{ github: 'ada', address: 'nope', points: 1, amount: '1' }],
+        entries: [{ github: 'ada', stellar: 'nope', issuesClosed: 1, amount: '1' }],
       }),
     ).toThrow(/not a valid Stellar account/);
   });
@@ -96,9 +104,9 @@ describe('parseManifest', () => {
     expect(() =>
       parseManifest({
         ...RAW,
-        contributors: [
-          { github: 'ada', address: ADDRESS_A, points: 1, amount: '1' },
-          { github: 'grace', address: ADDRESS_A, points: 2, amount: '2' },
+        entries: [
+          { github: 'ada', stellar: ADDRESS_A, issuesClosed: 1, amount: '1' },
+          { github: 'grace', stellar: ADDRESS_A, issuesClosed: 2, amount: '2' },
         ],
       }),
     ).toThrow(/duplicate contributor addresses/);
@@ -106,7 +114,6 @@ describe('parseManifest', () => {
 
   it('rejects a missing required field', () => {
     expect(() => parseManifest({ ...RAW, cycleId: undefined })).toThrow(/cycleId/);
-    expect(() => parseManifest({ ...RAW, root: undefined })).toThrow(/root/);
     expect(() => parseManifest('not an object')).toThrow(/must be a JSON object/);
   });
 });
@@ -115,7 +122,7 @@ describe('findManifestEntry', () => {
   it('matches by address first, then by GitHub handle', () => {
     const manifest = parseManifest(RAW);
     expect(findManifestEntry(manifest, ADDRESS_B)?.github).toBe('grace');
-    expect(findManifestEntry(manifest, '@grace')?.address).toBe(ADDRESS_B);
+    expect(findManifestEntry(manifest, '@grace')?.stellar).toBe(ADDRESS_B);
     expect(findManifestEntry(manifest, 'nobody')).toBeUndefined();
   });
 });

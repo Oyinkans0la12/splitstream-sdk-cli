@@ -25,13 +25,14 @@ import {
 
 describe('merkleLeaf', () => {
   it('matches the golden leaf hashes', () => {
-    // These values lock the exact byte layout of the leaf preimage:
-    // 0x00 || 32-byte strkey payload || 16-byte big-endian i128 amount.
-    // If this test fails after an intentional change, splitstream-actions'
-    // merkle.ts must change in the same way or claims break.
+    // These values lock the exact leaf pre-image: the full ScVal-form XDR of
+    // `Address` (44 bytes) followed by the ScVal-form XDR of `i128` (20 bytes),
+    // with no domain-separation prefix. The crossing check against
+    // splitstream-actions' own fixture lives in `merkleGolden.test.ts`.
     expect(merkleLeaf(ADDRESS_A, AMOUNT_A)).toHaveLength(32);
     expect(Buffer.from(merkleLeaf(ADDRESS_A, AMOUNT_A)).toString('hex')).toBe(GOLDEN.leafA);
     expect(Buffer.from(merkleLeaf(ADDRESS_B, AMOUNT_B)).toString('hex')).toBe(GOLDEN.leafB);
+    expect(Buffer.from(merkleLeaf(ADDRESS_C, AMOUNT_C)).toString('hex')).toBe(GOLDEN.leafC);
   });
 
   it('produces different leaves for different amounts', () => {
@@ -43,48 +44,64 @@ describe('merkleLeaf', () => {
   it('rejects an invalid Stellar address', () => {
     expect(() => merkleLeaf('not-an-address', 1n)).toThrow(SplitStreamError);
   });
+
+  it('rejects an amount outside the i128 range', () => {
+    expect(() => merkleLeaf(ADDRESS_A, 1n << 127n)).toThrow(SplitStreamError);
+  });
 });
 
 describe('buildMerkleTree', () => {
   it('matches the golden root for a three-leaf tree', () => {
     const tree = buildMerkleTree([
-      { address: ADDRESS_A, amount: AMOUNT_A },
-      { address: ADDRESS_B, amount: AMOUNT_B },
-      { address: ADDRESS_C, amount: AMOUNT_C },
+      { stellar: ADDRESS_A, amount: AMOUNT_A },
+      { stellar: ADDRESS_B, amount: AMOUNT_B },
+      { stellar: ADDRESS_C, amount: AMOUNT_C },
     ]);
     expect(Buffer.from(tree.root).toString('hex')).toBe(GOLDEN.root3);
     expect(tree.layers).toHaveLength(3);
   });
 
+  it('orders leaves by ascending public-key bytes, not by leaf hash or input order', () => {
+    const tree = buildMerkleTree([
+      { stellar: ADDRESS_C, amount: AMOUNT_C },
+      { stellar: ADDRESS_A, amount: AMOUNT_A },
+      { stellar: ADDRESS_B, amount: AMOUNT_B },
+    ]);
+    // ADDRESS_B is the smallest pubkey, so its leaf comes first.
+    expect(Buffer.from(tree.leaves[0] as Uint8Array).toString('hex')).toBe(GOLDEN.leafB);
+    expect(Buffer.from(tree.leaves[1] as Uint8Array).toString('hex')).toBe(GOLDEN.leafA);
+    expect(Buffer.from(tree.leaves[2] as Uint8Array).toString('hex')).toBe(GOLDEN.leafC);
+  });
+
   it('uses the leaf itself as the root for a single leaf', () => {
-    const tree = buildMerkleTree([{ address: ADDRESS_A, amount: 1n }]);
+    const tree = buildMerkleTree([{ stellar: ADDRESS_A, amount: 1n }]);
     expect(Buffer.from(tree.root).toString('hex')).toBe(GOLDEN.root1);
     expect(Buffer.from(tree.root).toString('hex')).toBe(GOLDEN.leaf1);
   });
 
   it('is independent of insertion order', () => {
     const orderA = buildMerkleTree([
-      { address: ADDRESS_A, amount: AMOUNT_A },
-      { address: ADDRESS_B, amount: AMOUNT_B },
-      { address: ADDRESS_C, amount: AMOUNT_A },
+      { stellar: ADDRESS_A, amount: AMOUNT_A },
+      { stellar: ADDRESS_B, amount: AMOUNT_B },
+      { stellar: ADDRESS_C, amount: AMOUNT_C },
     ]);
     const orderB = buildMerkleTree([
-      { address: ADDRESS_C, amount: AMOUNT_A },
-      { address: ADDRESS_B, amount: AMOUNT_B },
-      { address: ADDRESS_A, amount: AMOUNT_A },
+      { stellar: ADDRESS_C, amount: AMOUNT_C },
+      { stellar: ADDRESS_B, amount: AMOUNT_B },
+      { stellar: ADDRESS_A, amount: AMOUNT_A },
     ]);
     expect(Buffer.from(orderA.root).toString('hex')).toBe(Buffer.from(orderB.root).toString('hex'));
   });
 
-  it('handles an odd leaf count by hashing the last node with itself', () => {
-    // 5 leaves forces two rounds of odd-node promotion, and every leaf must
-    // still produce a proof that verifies against the same root.
-    const entries = [1n, 2n, 3n, 4n, 5n].map((seed) => ({ address: ADDRESS_A, amount: seed }));
+  it('promotes an unpaired node unchanged and still proves every leaf', () => {
+    // 5 leaves forces two rounds of odd-node promotion; every leaf must still
+    // produce a proof that verifies against the same root.
+    const entries = [1n, 2n, 3n, 4n, 5n].map((amount) => ({ stellar: ADDRESS_A, amount }));
     const tree = buildMerkleTree(entries);
     expect(tree.leaves).toHaveLength(5);
 
     for (const entry of entries) {
-      const leaf = merkleLeaf(entry.address, entry.amount);
+      const leaf = merkleLeaf(entry.stellar, entry.amount);
       const proof = merkleProofForLeaf(tree, leaf);
       expect(
         verifyMerkleProof(
@@ -102,21 +119,21 @@ describe('buildMerkleTree', () => {
 });
 
 describe('hashPair', () => {
-  it('is order-independent and domain separated', () => {
+  it('is order-independent and is a bare SHA-256 of the sorted concatenation', () => {
     const left = merkleLeaf(ADDRESS_A, AMOUNT_A);
     const right = merkleLeaf(ADDRESS_B, AMOUNT_B);
     const ab = Buffer.from(hashPair(left, right)).toString('hex');
     const ba = Buffer.from(hashPair(right, left)).toString('hex');
     expect(ab).toBe(ba);
 
-    // Independently confirm the 0x01 domain prefix: a bare SHA-256 over the
-    // sorted concatenation - the "obvious" naive implementation - must differ.
+    // The frozen scheme adds no domain-separation prefix at internal nodes,
+    // unlike the previous (incorrect) implementation.
     const sorted =
       Buffer.compare(Buffer.from(left), Buffer.from(right)) <= 0
         ? Buffer.concat([Buffer.from(left), Buffer.from(right)])
         : Buffer.concat([Buffer.from(right), Buffer.from(left)]);
     const undecorated = createHash('sha256').update(sorted).digest('hex');
-    expect(ab).not.toBe(undecorated);
+    expect(ab).toBe(undecorated);
   });
 });
 
@@ -127,6 +144,7 @@ describe('buildClaimProof', () => {
 
     expect(proofB.github).toBe('grace');
     expect(proofB.amount).toBe(AMOUNT_B);
+    expect(proofB.issuesClosed).toBe(25);
     expect(proofB.proof).toEqual([...GOLDEN.proofB]);
     expect(proofB.computedRoot).toBe(GOLDEN.root3);
     expect(proofB.manifestRoot).toBe(GOLDEN.root3);
@@ -136,6 +154,13 @@ describe('buildClaimProof', () => {
     const proofA = buildClaimProof(manifest, ADDRESS_A);
     expect(proofA.proof).toEqual([...GOLDEN.proofA]);
     expect(verifyMerkleProof(proofA.proof, proofA.leaf, proofA.computedRoot)).toBe(true);
+
+    // ADDRESS_C's leaf node was promoted unchanged, so its proof is shorter
+    // than the tree height but still verifies.
+    const proofC = buildClaimProof(manifest, ADDRESS_C);
+    expect(proofC.proof).toEqual([...GOLDEN.proofC]);
+    expect(proofC.proof).toHaveLength(1);
+    expect(verifyMerkleProof(proofC.proof, proofC.leaf, proofC.computedRoot)).toBe(true);
   });
 
   it('recomputes the root from the manifest rows', () => {
@@ -143,7 +168,7 @@ describe('buildClaimProof', () => {
   });
 
   it('flags a manifest whose published root does not match its rows', () => {
-    const tampered = goldenManifest({ root: 'ff'.repeat(32) });
+    const tampered = goldenManifest({ merkleRoot: 'ff'.repeat(32) });
     const proof = buildClaimProof(tampered, ADDRESS_A);
     expect(proof.rootMatches).toBe(false);
     expect(proof.manifestRoot).toBe('ff'.repeat(32));
@@ -168,16 +193,17 @@ describe('buildClaimProof', () => {
 });
 
 describe('merkleProofForLeaf', () => {
-  it('returns one sibling per level and doubles the hash each level', () => {
+  it('returns one sibling per hashing level and every sibling is a 32-byte hash', () => {
     const tree = buildMerkleTree([
-      { address: ADDRESS_A, amount: AMOUNT_A },
-      { address: ADDRESS_B, amount: AMOUNT_B },
-      { address: ADDRESS_C, amount: AMOUNT_A },
-      { address: ADDRESS_A, amount: AMOUNT_B },
+      { stellar: ADDRESS_A, amount: AMOUNT_A },
+      { stellar: ADDRESS_B, amount: AMOUNT_B },
+      { stellar: ADDRESS_C, amount: AMOUNT_C },
+      { stellar: ADDRESS_A, amount: AMOUNT_B },
     ]);
     const leaf = merkleLeaf(ADDRESS_A, AMOUNT_A);
     const proof = merkleProofForLeaf(tree, leaf);
-    expect(proof).toHaveLength(tree.layers.length - 1);
+    expect(proof.length).toBeGreaterThan(0);
+    expect(proof.length).toBeLessThanOrEqual(tree.layers.length - 1);
     for (const sibling of proof) {
       expect(sibling).toHaveLength(32);
     }
