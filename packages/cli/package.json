@@ -2,7 +2,7 @@
   "name": "splitstream-cli",
   "version": "0.1.0",
   "description": "Terminal cockpit for simulating, checking, and claiming SplitStream payouts.",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=20"

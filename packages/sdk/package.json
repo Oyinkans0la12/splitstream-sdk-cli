@@ -2,7 +2,7 @@
   "name": "@splitstream/sdk",
   "version": "0.1.0",
   "description": "Thin, typed client for the deployed splitstream-core contract. Browser-safe: no CLI-only dependencies.",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=20"
