@@ -114,7 +114,11 @@ describe('collectStatus', () => {
   });
 
   it('treats a missing manifest as "no extra context" rather than an error', async () => {
-    const result = await collectStatus(fakeClient(), { cycle: '3', repo: 'nope/nope' }, META);
+    const result = await collectStatus(
+      fakeClient(),
+      { cycle: '3', repo: manifestDirectory([]) },
+      META,
+    );
     expect(result.manifest).toBeNull();
   });
 });
