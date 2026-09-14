@@ -159,7 +159,11 @@ export async function loadManifest(options: LoadManifestOptions): Promise<Loaded
         `GitHub returned HTTP ${response.status} for ${url}. Check --repo and --ref, or pass --manifest <path>.`,
       );
     }
-    return { manifest: parseOrExplain(await response.text(), url), source: url, json: await response.text() };
+    // The body can only be read once: keep the text and hand the same string to
+    // both the parser and the caller (a second `response.text()` rejects with
+    // "Body is unusable").
+    const json = await response.text();
+    return { manifest: parseOrExplain(json, url), source: url, json };
   }
 
   for (const candidate of candidateLocalPaths(cycleId)) {
