@@ -1,17 +1,41 @@
-# splitstream-sdk-cli
+<p align="center">
+  <img src="assets/splitstream-banner.svg" alt="SplitStream banner" width="700" />
+</p>
 
-Client tooling for SplitStream, the pro-rata contributor payout vault on Stellar:
-a typed SDK over the deployed `splitstream-core` contract, and a terminal CLI for
-simulating, inspecting, claiming and reporting on a cycle's payouts.
+# SplitStream SDK & CLI
 
-- **`@splitstream/sdk`** - a thin, typed client. It never signs: `build*` methods
+![CI](https://github.com/Oyinkans0la12/splitstream-sdk-cli/actions/workflows/ci.yml/badge.svg)
+![Node](https://img.shields.io/badge/node-24-green)
+![License](https://img.shields.io/github/license/Oyinkans0la12/splitstream-sdk-cli)
+
+[Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+
+Client tooling for **SplitStream**, the pro-rata contributor payout vault on
+Stellar: a typed SDK over the deployed [splitstream-core] contract, and a
+terminal CLI for simulating, inspecting, claiming and reporting on a cycle's
+payouts.
+
+- **`@splitstream/sdk`** — a thin, typed client. It never signs: `build*` methods
   return unsigned transactions for you to sign with a wallet, a hardware device,
   or a locally stored testnet key. Browser-safe (no `node:crypto`, no CLI deps).
-- **`splitstream`** (CLI) - the operational cockpit:
+- **`splitstream`** (CLI) — the operational cockpit:
   [`simulate`](#splitstream-simulate), [`status`](#splitstream-status),
   [`claim`](#splitstream-claim), [`report`](#splitstream-report).
 
+> The manifest this tooling reads is written by [splitstream-actions], and the
+> vault it talks to is [splitstream-core]. The payout formula, Merkle leaf
+> format, and manifest shape are a frozen cross-repo contract, not this repo's
+> invention.
+
 Requires **Node.js >= 20**.
+
+## Deployed — Testnet
+
+| | |
+|---|---|
+| Vault contract | `CCC2LP2LOYZOLA2JW4C4K7JMR3TRJZIKHDSQYSFJ3R3MCDJLVBT3PZOC` |
+| Explorer | https://stellar.expert/explorer/testnet/contract/CCC2LP2LOYZOLA2JW4C4K7JMR3TRJZIKHDSQYSFJ3R3MCDJLVBT3PZOC |
+| Network | Test SDF Network ; September 2015 (Testnet) |
 
 ## Repository layout
 
@@ -39,7 +63,7 @@ node packages/cli/dist/index.js --help
 
 ## Configuration
 
-Copy `.env.example` to `.env` and fill it in - `.env` is loaded on startup and is
+Copy `.env.example` to `.env` and fill it in — `.env` is loaded on startup and is
 never committed.
 
 | Variable | Purpose |
@@ -82,24 +106,26 @@ detail on failure. Commands that talk to the chain also accept `--rpc-url`,
 
 ### `splitstream simulate`
 
-Dry run over a repository's pull requests: reads GitHub, applies the points
-rules below, and estimates the pro-rata payout plus the cost of the eventual
-`post_cycle_root` call. It never contacts RPC and never signs.
+Dry run over merged pull requests: reads GitHub, counts the distinct issues each
+contributor closed (the same rule the deployed action uses), and estimates the
+pro-rata payout plus the cost of the eventual `post_cycle_root` call. It never
+contacts RPC and never signs.
 
 ```bash
 splitstream simulate --cycle 3 --pool 100000 --map handles.json
-splitstream simulate --repo owner/name --manifest manifests/cycle-3.json --json
+splitstream simulate --repo owner/name --repo owner/other --manifest manifests/cycle-3.json --json
 ```
 
 | Flag | Meaning |
 | --- | --- |
-| `--repo <owner/name>` | Repository to read PRs from (defaults to the `origin` remote) |
-| `--cycle <id>`, `--manifest <path>` | Cycle to simulate; a manifest supplies pool, decimals and cycle id |
+| `--repo <owner/name>` | Repository to read merged PRs from (repeatable; defaults to the `origin` remote) |
+| `--cycle <id>`, `--manifest <path>` | Cycle to simulate; a manifest supplies the pool and cycle id |
 | `--ref <ref>` | Git ref to read manifests from (default `main`) |
+| `--since <iso>` | Cycle window lower bound; defaults to the previous cycle manifest's `generatedAt` |
 | `--pool <amount>` | Pool size in whole tokens (overrides the manifest) |
-| `--decimals <n>` | Token decimals when no manifest is available (default `7`) |
+| `--decimals <n>` | Token decimals for display and `--pool` parsing (default `7`) |
 | `--map <path>` | JSON object of `handle -> Stellar address` |
-| `--max-prs <n>` | Maximum pull requests to score (default `300`) |
+| `--max-prs <n>` | Maximum merged pull requests to consider (default `300`) |
 | `--json` | Machine-readable output |
 
 ### `splitstream status`
@@ -146,8 +172,8 @@ splitstream claim --cycle 3 --repo owner/name --wallet hardware
 | `--no-withdraw` | Stop after `credit_claim` |
 
 Before signing, the CLI recomputes the Merkle root from the manifest's own rows.
-If it disagrees with the published root it refuses to submit (the proof would
-fail on-chain) unless `--force` is passed, which is reported loudly.
+If it disagrees with the published `merkleRoot` it refuses to submit (the proof
+would fail on-chain) unless `--force` is passed, which is reported loudly.
 
 ### `splitstream report`
 
@@ -176,10 +202,10 @@ snippet that reproduces every number.
 There are exactly two ways to sign, and neither of them is "paste a secret key
 into the terminal":
 
-1. **`local`** - a keypair from `SPLITSTREAM_DEV_SECRET_KEY`. It is labelled
+1. **`local`** — a keypair from `SPLITSTREAM_DEV_SECRET_KEY`. It is labelled
    `INSECURE, testnet-only` wherever it is printed, and it is **hard-blocked on
    mainnet**. It is never accepted from a flag or a config file.
-2. **`hardware`** - signing delegated to a Ledger device via the optional
+2. **`hardware`** — signing delegated to a Ledger device via the optional
    `@ledgerhq/hw-app-str` and `@ledgerhq/hw-transport-node-hid` packages, which
    keeps the key off the machine. Ledger support is installed on demand; the
    CLI tells you to run
@@ -191,49 +217,87 @@ A mainnet claim therefore requires a hardware wallet, by construction.
 ## Cycles and manifests
 
 A manifest is the contract between the action that publishes a cycle
-(`splitstream-actions`) and this tooling. It lives at
-`manifests/cycle-<id>.json` and is fetched from a local checkout, from GitHub at
-`--ref`, or read from `--manifest`:
+([splitstream-actions]) and this tooling. It lives at `manifests/cycle-<id>.json`
+and is fetched from a local checkout, from GitHub at `--ref`, or read from
+`--manifest`. This is the **real, current shape** the action writes:
 
 ```json
 {
-  "version": 1,
-  "cycleId": 3,
-  "poolAmount": "100000000",
-  "totalPoints": 100,
-  "tokenDecimals": 7,
-  "root": "…64 hex characters…",
-  "generatedAt": "2026-09-01T00:00:00.000Z",
-  "dust": "0",
-  "contributors": [
-    { "github": "ada", "address": "G...", "points": 50, "amount": "50000000" }
-  ]
+  "cycleId": 4,
+  "generatedAt": "2026-09-10T00:00:00Z",
+  "poolAmount": "5000000000",
+  "totalIssuesClosed": 4,
+  "entries": [
+    { "github": "octocat", "stellar": "GABCDEF...", "issuesClosed": 3, "amount": "3750000000" }
+  ],
+  "dustRemainder": "3",
+  "merkleRoot": "hex-encoded-32-byte-root"
 }
 ```
 
-Field aliases are accepted for `cycle`/`cycleId` and `root`/`merkleRoot`. Token
-amounts cross the JSON boundary as **decimal strings in base units** and become
-`bigint` at parse time - JSON numbers are never used for token amounts anywhere
-in this codebase.
+- `entries` — one row per contributor; `stellar` is their `G...` account and
+  `issuesClosed` is the count that produced the payout. There is no `address`
+  or `points` field.
+- `totalIssuesClosed` — the payout denominator (the sum of `entries[].issuesClosed`).
+- `amount` and `poolAmount` — **decimal strings in base units**; they become
+  `bigint` at parse time. JSON numbers are never used for token amounts.
+- `dustRemainder` — the integer-division remainder left in the vault.
+- `merkleRoot` — lowercase hex. `root` is accepted only as a read-compatibility
+  alias; `merkleRoot` is the canonical field.
 
-### Points rules
+There is deliberately **no `version` field and no `tokenDecimals`**: token
+decimals are a property of the SEP-41 token contract, so they are read from the
+chain at runtime with `SplitStreamClient.getTokenDecimals()` rather than being
+asserted by a data file that cannot verify them.
 
-`simulate` scores pull requests with an explicit, auditable rule set. Label
-matches win over size buckets:
+## Payout rule
 
-- A `points:N` label (also `pts:N`, `point:N`, letter case ignored) awards `N`
-  points. The explicit set is 10, 25, 50, 100, 150 and 200.
-- Otherwise a `size/XS|S|M|L|XL` label is used.
-- Otherwise points fall back to PR size by total churn
-  (`additions + deletions`):
+The rule is deliberately minimal, and it is the exact rule the deployed action
+uses. A qualifying issue is **any issue closed via a merged pull request that
+contains a recognized closing keyword** — `Closes #N` / `Fixes #N` /
+`Resolves #N`, case-insensitive — in one of the tracked repositories, inside the
+cycle window.
 
-  | Churn | ≤ 10 | ≤ 50 | ≤ 200 | ≤ 500 | > 500 |
-  | --- | ---: | ---: | ---: | ---: | ---: |
-  | Points | 10 | 25 | 50 | 100 | 200 |
+- **No label of any kind is read.** Complexity, type, size and `points:*` labels
+  are informational only and play no role in payout math.
+- Every qualifying issue counts equally: **one issue, one share**.
+- Each distinct issue closed by a contributor's PRs increments their count
+  exactly once — the same issue referenced by two of their PRs is not
+  double-counted — and counts are summed across every repository before shares
+  are computed.
+- Credit goes to the **PR author** (the PR closes the issue; the PR author did
+  the work), not the issue author.
 
-Unmerged pull requests score the same as merged ones by default. Allocations are
-split with integer arithmetic only; the remainder stays in the vault as dust,
-matching the on-chain behaviour the manifest records.
+Payouts use the frozen formula, in integer arithmetic only:
+
+```
+contributor_amount = floor(poolAmount * contributor_issues_closed / totalIssuesClosed)
+```
+
+The remainder that does not divide evenly is recorded as `dustRemainder` and
+stays in the vault, matching the on-chain behaviour the manifest records.
+
+## Merkle proof format
+
+The leaf format is **frozen** and shared byte-for-byte with [splitstream-core]
+(which verifies it) and [splitstream-actions] (which builds it):
+
+```
+leaf = sha256( xdr_encode(ScVal(Address(stellar))) || xdr_encode(ScVal(i128(amount))) )
+
+Address XDR (44 bytes):  u32(SCV_ADDRESS=18) | u32(SC_ADDRESS_TYPE_ACCOUNT=0) | u32(publickey ED25519=0) | ed25519(32)
+i128 XDR     (20 bytes):  u32(SCV_I128=10) | int64 hi | uint64 lo
+```
+
+Tree construction is a **sorted-pair Merkle tree**: at each level, children are
+paired left-to-right and concatenated in ascending byte order before hashing,
+and an unpaired node is **promoted unchanged**. Leaves are ordered by
+**ascending Stellar public-key bytes** (not by leaf hash, and not by manifest
+row order), so the root is reproducible from the manifest alone.
+
+`packages/sdk/test/merkleGolden.test.ts` pins all of this against
+`splitstream-actions`' own committed golden fixture and a real-shaped manifest,
+not merely against this repo's internal consistency.
 
 ## Using the SDK
 
@@ -250,6 +314,7 @@ const client = new SplitStreamClient({
 const balance = await client.getBalance(address);      // bigint, base units
 const root = await client.getCycleRoot(3);             // lowercase hex, or null
 const claimed = await client.hasClaimed(3, address);
+const decimals = await client.getTokenDecimals();      // from the token contract
 
 const tx = await client.buildClaimTx(address, 3, amount, proof); // unsigned
 const signedXdr = await myWallet.sign(tx);                        // you sign it
@@ -264,6 +329,52 @@ The package also exports the Merkle proof helpers (`buildClaimProof`,
 (`formatTokenAmount`, `parseTokenAmount`), manifest parsing (`parseManifest`)
 and contract-error decoding (`SplitStreamError`).
 
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the
+build/test workflow and PR expectations, and [SECURITY.md](SECURITY.md) for the
+security model and responsible-disclosure process. Found a bug or have a feature
+idea? [Open an issue](https://github.com/Oyinkans0la12/splitstream-sdk-cli/issues).
+
+## Contributors
+
+[![Contributors](https://contrib.rocks/image?repo=Oyinkans0la12/splitstream-sdk-cli)](https://github.com/Oyinkans0la12/splitstream-sdk-cli/graphs/contributors)
+
 ## License
 
-Apache-2.0.
+This project is licensed under the MIT License — see [LICENSE](./LICENSE) for details.
+
+## Community
+
+- 💬 **GitHub Issues** — bug reports, feature requests, and design discussion
+- 🔒 **Security** — report vulnerabilities privately per [SECURITY.md](SECURITY.md)
+- 📋 **Wave** — this repo participates in the
+  [Drips Stellar Wave](https://www.drips.network/wave/stellar)
+
+## Maintainers
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/Oyinkans0la12">
+        <img src="https://github.com/Oyinkans0la12.png" width="100" alt="Oyinkans0la12" />
+      </a>
+      <br />
+      <strong>Oyinkans0la12</strong>
+      <br />
+      Smart Contract Engineer
+      <br />
+      <a href="https://github.com/Oyinkans0la12">GitHub</a>
+    </td>
+    <td align="left">
+      <strong>Contact</strong>
+      <br />
+      <a href="https://github.com/Oyinkans0la12/splitstream-sdk-cli/issues">GitHub Issues</a> — primary channel for bugs, feature requests, and design discussion
+      <br />
+      🔒 For vulnerabilities, use a <a href="https://github.com/Oyinkans0la12/splitstream-sdk-cli/security/advisories/new">private security advisory</a> per SECURITY.md
+    </td>
+  </tr>
+</table>
+
+[splitstream-core]: https://github.com/Oyinkans0la12/splitstream-core
+[splitstream-actions]: https://github.com/Oyinkans0la12/splitstream-actions
