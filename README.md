@@ -311,6 +311,8 @@ Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the bui
 ## Community
 
 - 💬 **GitHub Issues** — bug reports, feature requests, and design discussion
+- 🗣️ **Discord** — questions, help and release chatter in the [SplitStream server](https://discord.gg/DzSUheDtQ)
+- ✈️ **Telegram** — the same conversation in the [SplitStream group](https://t.me/+zOMeL6fD6uY1ODhk)
 - 🔒 **Security** — report vulnerabilities privately per [SECURITY.md](SECURITY.md)
 - 📋 **Wave** — this repo participates in the [Drips Stellar Wave](https://www.drips.network/wave/stellar)
 
