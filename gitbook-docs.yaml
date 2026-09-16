@@ -1,0 +1,11 @@
+$schema: https://api.gitbook.com/gitbook-docs.yaml
+site:
+  title: SplitStream SDK & CLI
+  structure:
+    - type: space
+      key: space-docs
+      title: SplitStream SDK & CLI
+      path: docs
+      default: true
+      content:
+        directory: ./
