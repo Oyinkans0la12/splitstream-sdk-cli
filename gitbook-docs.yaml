@@ -1,11 +1,21 @@
+# GitBook Site Git Sync configuration.
+# Site project directory: repository root. Content directories are resolved
+# from here, so ./docs reads the docs/ directory at the repository root.
+# Branch: main. The sync target cannot be read from the GitBook API without an
+# account token, so this file matches splitstream-core's and splitstream-actions'
+# working configs: the same owner, the same docs/ layout, the same flat pages.
 $schema: https://api.gitbook.com/gitbook-docs.yaml
 site:
   title: SplitStream SDK & CLI
   structure:
+    # The repository holds a single documentation directory, docs/, which is
+    # read as one book (docs/SUMMARY.md is its table of contents). No sections
+    # are declared, so this space is listed at the top level and marked as the
+    # site default.
     - type: space
       key: space-docs
-      title: SplitStream SDK & CLI
+      title: Documentation
       path: docs
       default: true
       content:
-        directory: ./
+        directory: ./docs
