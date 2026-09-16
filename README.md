@@ -22,7 +22,7 @@ Client tooling for SplitStream, the pro-rata contributor payout vault on Stellar
 
 ## What it is
 
-A Wave cycle closes, a pool of funds is owed to the contributors who closed issues, and someone has to work out who gets what — provably, reproducibly, and without a maintainer hand-assigning numbers. SplitStream settles that on-chain: a per-cycle Merkle root is posted to a Soroban vault by [splitstream-actions], and each contributor claims their own share against it.
+A sprint cycle closes, a pool of funds is owed to open-source contributors who closed issues, and someone has to work out who gets what — provably, reproducibly, and without a maintainer hand-assigning numbers. SplitStream settles that on-chain: a per-cycle Merkle root is posted to a Soroban vault by [splitstream-actions], and each contributor claims their own share against it.
 
 This repo is the client half of that system. It talks to the vault, reads the manifests the action writes, and never holds funds or private keys on your behalf.
 
@@ -312,7 +312,6 @@ Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the bui
 
 - 💬 **GitHub Issues** — bug reports, feature requests, and design discussion
 - 🔒 **Security** — report vulnerabilities privately per [SECURITY.md](SECURITY.md)
-- 📋 **Wave** — this repo participates in the [Drips Stellar Wave](https://www.drips.network/wave/stellar)
 
 ## Socials
 

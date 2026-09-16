@@ -1,6 +1,6 @@
 # Introduction
 
-SplitStream is a Soroban settlement protocol that lets a Drips Wave team turn
+SplitStream is a Soroban settlement protocol that lets an open-source team turn
 pooled treasury funds into a verifiable, disputable, on-chain distribution to
 contributors, instead of working out who gets what by hand. The pieces are
 [splitstream-core] — the vault contract that holds the pool, enforces the cycle
