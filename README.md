@@ -18,7 +18,7 @@ Client tooling for SplitStream, the pro-rata contributor payout vault on Stellar
 ![Node](https://img.shields.io/badge/node-24-green)
 ![License](https://img.shields.io/github/license/Oyinkans0la12/splitstream-sdk-cli)
 
-[Testnet Explorer](https://stellar.expert/explorer/testnet/contract/CCC2LP2LOYZOLA2JW4C4K7JMR3TRJZIKHDSQYSFJ3R3MCDJLVBT3PZOC) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+[Docs](https://splitstream.gitbook.io/splitstream-sdk-cli/) · [Testnet Explorer](https://stellar.expert/explorer/testnet/contract/CCC2LP2LOYZOLA2JW4C4K7JMR3TRJZIKHDSQYSFJ3R3MCDJLVBT3PZOC) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 ## What it is
 
